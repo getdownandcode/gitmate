@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Build / packaging (hatchling)
+build/
+dist/
+*.egg-info/
+*.egg
+*.whl
+src/*.egg-info/
+
+# Installers / pipx local
+pip-wheel-metadata/
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Linters / type checkers
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Local dev config / secrets - never commit keys (per AGENTS.md: keyring only)
+.env
+.env.*
+*.env
+config.toml
+.gitmate/
+metrics.db
+*.db
+*.sqlite
+*.sqlite3
+
+# diskcache local cache
+.cache/
+.diskcache/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.vim/
+
+# Jupyter / misc
+.ipynb_checkpoints/
+*.log
+*.tmp
+
+#md files
+plan.md

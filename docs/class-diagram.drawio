@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram name="class-diagram">
+    <mxGraphModel dx="1000" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1280" pageHeight="920" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="gitmate — Phase 0 class diagram" style="text;html=1;align=left;verticalAlign=middle;fontStyle=1;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="700" height="34" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="src/gitmate/config.py + cli.py · commands carry no logic; all I/O behind substitutable interfaces" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="40" y="56" width="1000" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="cfg_t" value="&#171;dataclass&#187;&lt;br/&gt;GitmateConfig" style="rounded=1;whiteSpace=wrap;html=1;align=center;fontStyle=1;fontSize=13;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="60" y="90" width="220" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="cfg_b" value="+ model: str&lt;br/&gt;+ commit_style: str&lt;br/&gt;+ budget_cap_usd: float | None" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontSize=12;spacingLeft=8;spacingTop=6;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="60" y="138" width="220" height="84" as="geometry"/>
+        </mxCell>
+        <mxCell id="ss_t" value="&#171;protocol&#187;&lt;br/&gt;SecretStore" style="rounded=1;whiteSpace=wrap;html=1;align=center;fontStyle=1;fontSize=13;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="500" y="90" width="220" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="ss_b" value="+ set_secret(account, secret)&lt;br/&gt;+ get_secret(account): str | None" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontSize=12;spacingLeft=8;spacingTop=6;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="500" y="138" width="220" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="err_t" value="ConfigError&lt;br/&gt;&#171;extends Exception&#187;" style="rounded=1;whiteSpace=wrap;html=1;align=center;fontStyle=1;fontSize=13;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="920" y="90" width="220" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="err_b" value="raised by load_config()&lt;br/&gt;on unreadable TOML" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontSize=12;spacingLeft=8;spacingTop=6;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="920" y="138" width="220" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="kr_t" value="KeyringSecretStore" style="rounded=1;whiteSpace=wrap;html=1;align=center;fontStyle=1;fontSize=13;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="280" y="380" width="220" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="kr_b" value="+ set_secret(...) → OS Keychain&lt;br/&gt;+ get_secret(...) → str | None&lt;br/&gt;— production store" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontSize=12;spacingLeft=8;spacingTop=6;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="280" y="420" width="220" height="92" as="geometry"/>
+        </mxCell>
+        <mxCell id="mem_t" value="InMemorySecretStore" style="rounded=1;whiteSpace=wrap;html=1;align=center;fontStyle=1;fontSize=13;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="740" y="380" width="220" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="mem_b" value="− _secrets: dict&lt;br/&gt;+ set_secret(...)&lt;br/&gt;+ get_secret(...)&lt;br/&gt;— tests only, no OS store" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontSize=12;spacingLeft=8;spacingTop=6;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="740" y="420" width="220" height="112" as="geometry"/>
+        </mxCell>
+        <mxCell id="cli_t" value="cli — Typer app&lt;br/&gt;&#171;commands only, no logic&#187;" style="rounded=1;whiteSpace=wrap;html=1;align=center;fontStyle=1;fontSize=13;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="440" y="620" width="340" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="cli_b" value="commit() · pr-summary() · changelog() · doc()&lt;br/&gt;config set-key() / show() / set()&lt;br/&gt;— uses SecretStore + GitmateConfig" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontSize=12;spacingLeft=8;spacingTop=6;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="440" y="668" width="340" height="104" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend" value="Legend" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#666666;verticalAlign=top;fontStyle=1;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="830" width="900" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg1" value="" style="rounded=0;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="30" width="30" height="16" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg1t" value="Class" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="28" width="200" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg2" value="" style="rounded=0;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="legend">
+          <mxGeometry x="300" y="30" width="30" height="16" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg2t" value="Interface (protocol)" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;" vertex="1" parent="legend">
+          <mxGeometry x="340" y="28" width="200" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg3" value="" style="rounded=0;html=1;fillColor=none;strokeColor=#666666;dashed=1;" vertex="1" parent="legend">
+          <mxGeometry x="590" y="30" width="30" height="16" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg3t" value="Implements / uses (dashed)" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;" vertex="1" parent="legend">
+          <mxGeometry x="630" y="28" width="250" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_kr" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=0;dashed=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="kr_t" target="ss_b">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="390" y="300"/>
+              <mxPoint x="610" y="300"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_mem" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=0;dashed=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.86;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="mem_t" target="ss_b">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="850" y="300"/>
+              <mxPoint x="690" y="300"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_cli_ss" value="uses" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=12;labelBackgroundColor=#ffffff;endArrow=open;endFill=0;dashed=1;exitX=0.56;exitY=0;exitDx=0;exitDy=0;entryX=0.59;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli_t" target="ss_b">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_cli_cfg" value="uses" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=12;labelBackgroundColor=#ffffff;endArrow=open;endFill=0;dashed=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli_b" target="cfg_b">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="170" y="720"/>
+              <mxPoint x="170" y="222"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

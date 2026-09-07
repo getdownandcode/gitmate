@@ -68,3 +68,13 @@ Thumbs.db
 
 #md files
 plan.md
+
+#docs
+docs/architecture.visual-check.json
+docs/architecture.html
+docs/architecture.visual-check.1440x900.dark.png
+docs/architecture.visual-check.1440x900.light.png
+docs/architecture.visual-check.2048x1320.dark.png
+docs/architecture.visual-check.html
+
+gitmate.architecture.json

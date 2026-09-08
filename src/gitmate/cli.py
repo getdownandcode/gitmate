@@ -8,6 +8,7 @@ from rich.table import Table
 
 from gitmate import config as config_mod
 from gitmate.config import API_KEY_ACCOUNT
+from gitmate.diff_extractor import DiffExtractor, GitCommandError
 
 app = typer.Typer(
     help="AI-assisted git commit messages, PR summaries, and changelogs.",
@@ -49,6 +50,56 @@ def doc() -> None:
     _stub("doc", "not scheduled yet")
 
 
+@app.command(name="debug-diff")
+def debug_diff(
+    base: str | None = typer.Option(
+        None, "--base", help="Compare branch base against HEAD (e.g. --base main)."
+    ),
+    from_ref: str | None = typer.Option(None, "--from-ref", help="Range start ref."),
+    to_ref: str | None = typer.Option(None, "--to-ref", help="Range end ref."),
+    summary: bool = typer.Option(
+        False, "--summary", help="Show per-file stats only, no patch text."
+    ),
+) -> None:
+    """Print the cleaned, filtered diff (defaults to staged changes)."""
+    if base is not None and (from_ref is not None or to_ref is not None):
+        raise typer.BadParameter("--base cannot be combined with --from-ref/--to-ref.")
+    if (from_ref is None) != (to_ref is None):
+        raise typer.BadParameter("--from-ref and --to-ref must be given together.")
+    try:
+        cfg = config_mod.load_config()
+        extractor = DiffExtractor(extra_ignores=cfg.ignore_globs)
+        if base is not None:
+            diffs = extractor.branch_comparison(base)
+        elif from_ref is not None and to_ref is not None:
+            diffs = extractor.rev_range(from_ref, to_ref)
+        else:
+            diffs = extractor.staged()
+    except (GitCommandError, config_mod.ConfigError) as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
+    if not diffs:
+        console.print("No changes.")
+        return
+    table = Table(title="diff", show_header=True)
+    table.add_column("file")
+    table.add_column("status")
+    table.add_column("+", justify="right")
+    table.add_column("-", justify="right")
+    table.add_column("note")
+    for diff in diffs:
+        name = diff.path if diff.old_path is None else f"{diff.old_path} -> {diff.path}"
+        note = "binary, patch skipped" if diff.is_binary else ""
+        table.add_row(name, diff.status, str(diff.additions), str(diff.deletions), note)
+    console.print(table)
+    if summary:
+        return
+    for diff in diffs:
+        if diff.patch_text:
+            console.print(f"[bold]{diff.path}[/bold]")
+            console.print(diff.patch_text, markup=False, highlight=False, crop=False)
+
+
 @config_app.command("set-key")
 def config_set_key() -> None:
     """Store the LLM API key in the OS credential store."""
@@ -62,7 +113,11 @@ def config_set_key() -> None:
 @config_app.command("show")
 def config_show() -> None:
     """Print current settings (never prints the secret itself)."""
-    cfg = config_mod.load_config()
+    try:
+        cfg = config_mod.load_config()
+    except config_mod.ConfigError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
     key_set = secret_store.get_secret(API_KEY_ACCOUNT) is not None
     table = Table(title="gitmate config", show_header=False)
     table.add_column("field")
@@ -71,6 +126,7 @@ def config_show() -> None:
     table.add_row("model", cfg.model)
     table.add_row("commit_style", cfg.commit_style)
     table.add_row("budget_cap_usd", str(cfg.budget_cap_usd) if cfg.budget_cap_usd else "none")
+    table.add_row("ignore_globs", ", ".join(cfg.ignore_globs) if cfg.ignore_globs else "none")
     table.add_row("api_key", "set" if key_set else "not set")
     console.print(table)
 
@@ -78,7 +134,11 @@ def config_show() -> None:
 @config_app.command("set")
 def config_set(field: str, value: str) -> None:
     """Set one field: model, commit_style, or budget_cap_usd (empty clears)."""
-    cfg = config_mod.load_config()
+    try:
+        cfg = config_mod.load_config()
+    except config_mod.ConfigError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
     match field:
         case "model":
             cfg.model = value

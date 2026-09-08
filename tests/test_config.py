@@ -58,3 +58,15 @@ def test_memory_store_round_trip() -> None:
     assert store.get_secret("api-key") is None
     store.set_secret("api-key", "s3cr3t")
     assert store.get_secret("api-key") == "s3cr3t"
+
+
+def test_ignore_globs_round_trip(tmp_config_dir: Path) -> None:
+    save_config(GitmateConfig(ignore_globs=["*.gen.py"]))
+    assert load_config() == GitmateConfig(ignore_globs=["*.gen.py"])
+
+
+def test_ignore_globs_wrong_type_raises(tmp_config_dir: Path) -> None:
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text('ignore_globs = "*.gen.py"\n', encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config()

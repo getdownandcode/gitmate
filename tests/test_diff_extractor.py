@@ -12,6 +12,7 @@ from gitmate.diff_extractor import (
     DiffExtractor,
     GitCommandError,
     NotAGitRepo,
+    _parse_name_status,
     matches_any,
 )
 
@@ -118,3 +119,62 @@ def test_empty_diff(git_repo: Path) -> None:
 def test_bad_ref_raises(git_repo: Path) -> None:
     with pytest.raises(GitCommandError):
         DiffExtractor(git_repo).branch_comparison("does-not-exist")
+
+
+def test_filename_with_spaces_staged(git_repo: Path) -> None:
+    commit_file(git_repo, "my cool file.py", "line 1\n", "initial")
+    stage_file(git_repo, "my cool file.py", b"line 1\nline 2\n")
+    stage_file(git_repo, "brand new file.py", b"print('hello')\n")
+    diffs = DiffExtractor(git_repo).staged()
+    diff_map = {d.path: d for d in diffs}
+    assert "my cool file.py" in diff_map
+    assert diff_map["my cool file.py"].status == "modified"
+    assert diff_map["my cool file.py"].additions == 1
+    assert "+line 2" in diff_map["my cool file.py"].patch_text
+    assert "brand new file.py" in diff_map
+    assert diff_map["brand new file.py"].status == "added"
+    assert "+print('hello')" in diff_map["brand new file.py"].patch_text
+
+
+def test_filename_with_spaces_binary(git_repo: Path) -> None:
+    stage_file(git_repo, "bin space.bin", b"\x00\x01\x02\xffbinary\x00")
+    (diff,) = DiffExtractor(git_repo).staged()
+    assert diff.path == "bin space.bin"
+    assert diff.is_binary
+    assert diff.patch_text == ""
+
+
+def test_non_ascii_filename(git_repo: Path) -> None:
+    stage_file(git_repo, "café.txt", b"coffee\n")
+    (diff,) = DiffExtractor(git_repo).staged()
+    assert diff.path == "café.txt"
+    assert diff.status == "added"
+    assert diff.additions == 1
+    assert not diff.is_binary
+    assert "+coffee" in diff.patch_text
+
+
+def test_mnemonic_prefix_ambient_config(git_repo: Path) -> None:
+    # Ambient config already sets diff.mnemonicPrefix=true in git_repo fixture
+    commit_file(git_repo, "prefix_test.py", "v1\n", "initial")
+    stage_file(git_repo, "prefix_test.py", b"v1\nv2\n")
+    (diff,) = DiffExtractor(git_repo).staged()
+    assert diff.path == "prefix_test.py"
+    assert "+v2" in diff.patch_text
+    assert diff.status == "modified"
+
+
+def test_pure_rename_with_spaces(git_repo: Path) -> None:
+    commit_file(git_repo, "old name.py", "content\n", "add old")
+    subprocess.run(["git", "mv", "old name.py", "new name.py"], cwd=git_repo, check=True)
+    (diff,) = DiffExtractor(git_repo).staged()
+    assert diff.path == "new name.py"
+    assert diff.old_path == "old name.py"
+    assert diff.status == "renamed"
+    assert "rename from old name.py" in diff.patch_text
+    assert "rename to new name.py" in diff.patch_text
+
+
+def test_copy_status_row() -> None:
+    statuses = _parse_name_status("C100\told.py\tnew.py\n")
+    assert statuses["new.py"] == ("added", "old.py")

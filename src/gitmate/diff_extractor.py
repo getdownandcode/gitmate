@@ -170,9 +170,9 @@ def _parse_name_status(output: str) -> dict[str, tuple[FileStatus, str | None]]:
         if code not in _STATUS_MAP:
             raise GitCommandError(f"unknown git status code: {line!r}.")
         status = _STATUS_MAP[code]
-        if code == "R":
+        if code in ("R", "C"):
             if len(parts) != 3:
-                raise GitCommandError(f"cannot parse rename row: {line!r}.")
+                raise GitCommandError(f"cannot parse rename/copy row: {line!r}.")
             _, old, new = parts
             statuses[new] = (status, old)
         else:
@@ -200,24 +200,39 @@ def _parse_patch(output: str) -> dict[str, str]:
     chunk: list[str] = []
 
     def flush() -> None:
-        if current is not None and minus is not None:
-            key = current if current != "/dev/null" else minus
-            if key not in chunks:
-                chunks[key] = []
-                order.append(key)
-            chunks[key].extend(chunk)
+        nonlocal current, minus
+        if current is not None or minus is not None:
+            for cl in chunk:
+                if cl.startswith(("rename to ", "copy to ")):
+                    current = _strip_git_prefix(cl.split(" ", 2)[2].rstrip("\n"))
+                elif cl.startswith(("rename from ", "copy from ")):
+                    minus = _strip_git_prefix(cl.split(" ", 2)[2].rstrip("\n"))
+            key = current if current is not None and current != "/dev/null" else minus
+            if key is not None:
+                if key not in chunks:
+                    chunks[key] = []
+                    order.append(key)
+                chunks[key].extend(chunk)
 
     for line in output.splitlines(keepends=True):
         if line.startswith("diff --git "):
             flush()
             rest = line[len("diff --git ") :].rstrip("\n")
-            halves = rest.rsplit(" ", 1)
-            if len(halves) != 2:
-                raise GitCommandError(f"cannot parse diff header: {line!r}.")
-            minus = _strip_git_prefix(halves[0].strip())
-            current = _strip_git_prefix(halves[1].strip())
+            if len(rest) >= 5 and rest.startswith("a/"):
+                mid = (len(rest) - 1) // 2
+                if rest[mid : mid + 3] == " b/" and rest[2:mid] == rest[mid + 3 :]:
+                    minus = _strip_git_prefix(rest[2:mid])
+                    current = _strip_git_prefix(rest[mid + 3 :])
+                else:
+                    halves = rest.rsplit(" ", 1)
+                    minus = _strip_git_prefix(halves[0].strip()) if len(halves) == 2 else None
+                    current = _strip_git_prefix(halves[1].strip()) if len(halves) == 2 else None
+            else:
+                halves = rest.rsplit(" ", 1)
+                minus = _strip_git_prefix(halves[0].strip()) if len(halves) == 2 else None
+                current = _strip_git_prefix(halves[1].strip()) if len(halves) == 2 else None
             chunk = [line]
-        elif current is None:
+        elif current is None and minus is None:
             continue
         else:
             chunk.append(line)
@@ -268,9 +283,21 @@ class DiffExtractor:
     def _extract(self, base_args: list[str]) -> list[FileDiff]:
         """Run the three git calls and merge them keyed by path, never by order."""
         self._runner.run(["rev-parse", "--git-dir"], self._repo)
-        numstat = self._runner.run([*base_args, "-M", "-z", "--numstat"], self._repo)
-        patch = self._runner.run([*base_args, "-M", "--patch"], self._repo)
-        names = self._runner.run([*base_args, "-M", "--name-status"], self._repo)
+        git_flags = [
+            "-c",
+            "core.quotepath=false",
+            "-c",
+            "diff.mnemonicPrefix=false",
+            *base_args,
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+        ]
+        numstat = self._runner.run([*git_flags, "-M", "-z", "--numstat"], self._repo)
+        patch = self._runner.run([*git_flags, "-M", "--patch"], self._repo)
+        names = self._runner.run([*git_flags, "-M", "--name-status"], self._repo)
         counts, binary = _parse_numstat(numstat)
         statuses = _parse_name_status(names)
         patches = _parse_patch(patch)

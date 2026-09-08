@@ -45,6 +45,7 @@ def git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _git(repo, "config", "user.name", "Test")
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "diff.renames", "false")
+    _git(repo, "config", "diff.mnemonicPrefix", "true")
     _git(repo, "commit", "--allow-empty", "-m", "init")
     monkeypatch.chdir(repo)
     return repo

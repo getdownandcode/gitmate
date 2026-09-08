@@ -105,7 +105,9 @@ def test_debug_diff_conflicting_modes_fail(tmp_config_dir: Path, git_repo: Path)
     assert result.exit_code != 0
 
 
-def test_config_show_displays_ignore_globs(tmp_config_dir: Path) -> None:
+def test_config_show_displays_ignore_globs(
+    tmp_config_dir: Path, mem_store: InMemorySecretStore
+) -> None:
     result = runner.invoke(cli.app, ["config", "show"])
     assert result.exit_code == 0
     assert "ignore_globs" in result.output
@@ -139,7 +141,9 @@ def test_debug_diff_not_a_git_repo_clean_error(
     assert "Traceback" not in result.output
 
 
-def test_config_show_malformed_config_clean_error(tmp_config_dir: Path) -> None:
+def test_config_show_malformed_config_clean_error(
+    tmp_config_dir: Path, mem_store: InMemorySecretStore
+) -> None:
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text("model = [invalid toml\n", encoding="utf-8")
     result = runner.invoke(cli.app, ["config", "show"])

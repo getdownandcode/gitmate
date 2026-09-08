@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -32,6 +32,7 @@ class GitmateConfig:
     model: str = DEFAULT_MODEL
     commit_style: str = DEFAULT_COMMIT_STYLE
     budget_cap_usd: float | None = None
+    ignore_globs: list[str] = field(default_factory=list)
 
 
 class SecretStore(Protocol):
@@ -110,7 +111,10 @@ def load_config(path: Path | None = None) -> GitmateConfig:
         raise ConfigError(f"cannot parse {resolved}: 'budget_cap_usd' must be a number")
     else:
         cap = float(budget)
-    return GitmateConfig(model=model, commit_style=style, budget_cap_usd=cap)
+    globs = raw.get("ignore_globs", [])
+    if not isinstance(globs, list) or not all(isinstance(g, str) for g in globs):
+        raise ConfigError(f"cannot parse {resolved}: 'ignore_globs' must be a string list")
+    return GitmateConfig(model=model, commit_style=style, budget_cap_usd=cap, ignore_globs=globs)
 
 
 def save_config(cfg: GitmateConfig, path: Path | None = None) -> None:
@@ -120,4 +124,6 @@ def save_config(cfg: GitmateConfig, path: Path | None = None) -> None:
     data: dict[str, Any] = {"model": cfg.model, "commit_style": cfg.commit_style}
     if cfg.budget_cap_usd is not None:
         data["budget_cap_usd"] = cfg.budget_cap_usd
+    if cfg.ignore_globs:
+        data["ignore_globs"] = cfg.ignore_globs
     resolved.write_text(tomli_w.dumps(data), encoding="utf-8")

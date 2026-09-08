@@ -8,6 +8,7 @@ from rich.table import Table
 
 from gitmate import config as config_mod
 from gitmate.config import API_KEY_ACCOUNT
+from gitmate.diff_extractor import DiffExtractor, GitCommandError
 
 app = typer.Typer(
     help="AI-assisted git commit messages, PR summaries, and changelogs.",
@@ -47,6 +48,55 @@ def changelog() -> None:
 def doc() -> None:
     """Planned docs helper (no implementing phase assigned yet)."""
     _stub("doc", "not scheduled yet")
+
+
+@app.command(name="debug-diff")
+def debug_diff(
+    base: str | None = typer.Option(
+        None, "--base", help="Compare branch base against HEAD (e.g. --base main)."
+    ),
+    from_ref: str | None = typer.Option(None, "--from-ref", help="Range start ref."),
+    to_ref: str | None = typer.Option(None, "--to-ref", help="Range end ref."),
+    summary: bool = typer.Option(
+        False, "--summary", help="Show per-file stats only, no patch text."
+    ),
+) -> None:
+    """Print the cleaned, filtered diff (defaults to staged changes)."""
+    if base is not None and (from_ref is not None or to_ref is not None):
+        raise typer.BadParameter("--base cannot be combined with --from-ref/--to-ref.")
+    if (from_ref is None) != (to_ref is None):
+        raise typer.BadParameter("--from-ref and --to-ref must be given together.")
+    extractor = DiffExtractor(extra_ignores=config_mod.load_config().ignore_globs)
+    try:
+        if base is not None:
+            diffs = extractor.branch_comparison(base)
+        elif from_ref is not None and to_ref is not None:
+            diffs = extractor.rev_range(from_ref, to_ref)
+        else:
+            diffs = extractor.staged()
+    except GitCommandError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
+    if not diffs:
+        console.print("No changes.")
+        return
+    table = Table(title="diff", show_header=True)
+    table.add_column("file")
+    table.add_column("status")
+    table.add_column("+", justify="right")
+    table.add_column("-", justify="right")
+    table.add_column("note")
+    for diff in diffs:
+        name = diff.path if diff.old_path is None else f"{diff.old_path} -> {diff.path}"
+        note = "binary, patch skipped" if diff.is_binary else ""
+        table.add_row(name, diff.status, str(diff.additions), str(diff.deletions), note)
+    console.print(table)
+    if summary:
+        return
+    for diff in diffs:
+        if diff.patch_text:
+            console.print(f"[bold]{diff.path}[/bold]")
+            console.print(diff.patch_text, markup=False, highlight=False, crop=False)
 
 
 @config_app.command("set-key")

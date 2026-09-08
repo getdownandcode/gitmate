@@ -15,7 +15,7 @@ runner = CliRunner()
 def test_help_lists_all_commands() -> None:
     result = runner.invoke(cli.app, ["--help"])
     assert result.exit_code == 0
-    for name in ("commit", "pr-summary", "changelog", "doc", "config"):
+    for name in ("commit", "pr-summary", "changelog", "doc", "config", "debug-diff"):
         assert name in result.output
 
 
@@ -52,4 +52,46 @@ def test_config_set_field_persists(tmp_config_dir: Path) -> None:
 
 def test_config_set_unknown_field_fails(tmp_config_dir: Path) -> None:
     result = runner.invoke(cli.app, ["config", "set", "nope", "x"])
+    assert result.exit_code != 0
+
+
+def test_debug_diff_shows_table_and_patch(tmp_config_dir: Path, git_repo: Path) -> None:
+    from conftest import commit_file, stage_file
+
+    commit_file(git_repo, "a.py", "l1\n", "add a")
+    stage_file(git_repo, "a.py", b"l1\nl2\n")
+    result = runner.invoke(cli.app, ["debug-diff"])
+    assert result.exit_code == 0
+    assert "a.py" in result.output
+    assert "@@" in result.output
+
+
+def test_debug_diff_summary_omits_patch(tmp_config_dir: Path, git_repo: Path) -> None:
+    from conftest import commit_file, stage_file
+
+    commit_file(git_repo, "a.py", "l1\n", "add a")
+    stage_file(git_repo, "a.py", b"l1\nl2\n")
+    result = runner.invoke(cli.app, ["debug-diff", "--summary"])
+    assert result.exit_code == 0
+    assert "a.py" in result.output
+    assert "@@" not in result.output
+
+
+def test_debug_diff_branch_mode(tmp_config_dir: Path, git_repo: Path) -> None:
+    import subprocess
+
+    from conftest import commit_file
+
+    commit_file(git_repo, "b.py", "v1\n", "base")
+    subprocess.run(["git", "checkout", "-b", "f"], cwd=git_repo, check=True)
+    commit_file(git_repo, "b.py", "v1\nv2\n", "bump")
+    result = runner.invoke(cli.app, ["debug-diff", "--base", "main"])
+    assert result.exit_code == 0
+    assert "b.py" in result.output
+
+
+def test_debug_diff_conflicting_modes_fail(tmp_config_dir: Path, git_repo: Path) -> None:
+    result = runner.invoke(cli.app, ["debug-diff", "--base", "main", "--from-ref", "v1"])
+    assert result.exit_code != 0
+    result = runner.invoke(cli.app, ["debug-diff", "--from-ref", "v1"])
     assert result.exit_code != 0

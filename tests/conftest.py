@@ -19,9 +19,9 @@ def tmp_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return cfg_dir
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def mem_store(monkeypatch: pytest.MonkeyPatch) -> InMemorySecretStore:
-    """Swap the CLI's secret store for an in-memory fake."""
+    """Swap the CLI's secret store for an in-memory fake across all tests."""
     store = InMemorySecretStore()
     monkeypatch.setattr(cli, "secret_store", store)
     return store

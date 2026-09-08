@@ -63,6 +63,15 @@ def test_config_set_unknown_field_fails(tmp_config_dir: Path) -> None:
     assert result.exit_code != 0
 
 
+def test_config_set_ignore_globs_persists(tmp_config_dir: Path) -> None:
+    result = runner.invoke(cli.app, ["config", "set", "ignore_globs", "*.gen.py, *.tmp"])
+    assert result.exit_code == 0
+    assert load_config().ignore_globs == ["*.gen.py", "*.tmp"]
+    result = runner.invoke(cli.app, ["config", "set", "ignore_globs", ""])
+    assert result.exit_code == 0
+    assert load_config().ignore_globs == []
+
+
 def test_debug_diff_shows_table_and_patch(tmp_config_dir: Path, git_repo: Path) -> None:
     from conftest import commit_file, stage_file
 

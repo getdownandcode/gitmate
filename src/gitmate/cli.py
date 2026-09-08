@@ -133,7 +133,7 @@ def config_show() -> None:
 
 @config_app.command("set")
 def config_set(field: str, value: str) -> None:
-    """Set one field: model, commit_style, or budget_cap_usd (empty clears)."""
+    """Set one field: model, commit_style, budget_cap_usd, ignore_globs."""
     try:
         cfg = config_mod.load_config()
     except config_mod.ConfigError as exc:
@@ -146,9 +146,12 @@ def config_set(field: str, value: str) -> None:
             cfg.commit_style = value
         case "budget_cap_usd":
             cfg.budget_cap_usd = None if value == "" else _parse_budget(value)
+        case "ignore_globs":
+            cfg.ignore_globs = [g.strip() for g in value.split(",") if g.strip()]
         case _:
             raise typer.BadParameter(
-                f"unknown field {field!r}; expected model, commit_style, or budget_cap_usd."
+                f"unknown field {field!r}; expected model, commit_style, "
+                "budget_cap_usd, or ignore_globs."
             )
     config_mod.save_config(cfg)
     console.print(f"[green]Set {field}.[/green]")

@@ -21,13 +21,17 @@ uv sync --extra dev
 uv run pytest
 ```
 
-## Usage (Phase 0)
+## Usage (Phases 0–1)
 
 ```bash
 uv run gitmate --help
 uv run gitmate config set-key   # stored in the OS credential store, never in a file
 uv run gitmate config show
 uv run gitmate config set model gemini-flash
+uv run gitmate config set ignore_globs '*.gen.py,*.tmp'  # comma-separated, empty clears
+uv run gitmate debug-diff             # staged diff: per-file table + cleaned patch
+uv run gitmate debug-diff --summary   # per-file stats table only, no patch text
+uv run gitmate debug-diff --base main # branch-vs-main diff (PR path)
 ```
 
 `commit`, `pr-summary`, `changelog`, and `doc` are stubbed until their phases

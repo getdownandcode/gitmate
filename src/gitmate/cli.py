@@ -66,15 +66,16 @@ def debug_diff(
         raise typer.BadParameter("--base cannot be combined with --from-ref/--to-ref.")
     if (from_ref is None) != (to_ref is None):
         raise typer.BadParameter("--from-ref and --to-ref must be given together.")
-    extractor = DiffExtractor(extra_ignores=config_mod.load_config().ignore_globs)
     try:
+        cfg = config_mod.load_config()
+        extractor = DiffExtractor(extra_ignores=cfg.ignore_globs)
         if base is not None:
             diffs = extractor.branch_comparison(base)
         elif from_ref is not None and to_ref is not None:
             diffs = extractor.rev_range(from_ref, to_ref)
         else:
             diffs = extractor.staged()
-    except GitCommandError as exc:
+    except (GitCommandError, config_mod.ConfigError) as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(1) from None
     if not diffs:
@@ -112,7 +113,11 @@ def config_set_key() -> None:
 @config_app.command("show")
 def config_show() -> None:
     """Print current settings (never prints the secret itself)."""
-    cfg = config_mod.load_config()
+    try:
+        cfg = config_mod.load_config()
+    except config_mod.ConfigError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
     key_set = secret_store.get_secret(API_KEY_ACCOUNT) is not None
     table = Table(title="gitmate config", show_header=False)
     table.add_column("field")
@@ -121,6 +126,7 @@ def config_show() -> None:
     table.add_row("model", cfg.model)
     table.add_row("commit_style", cfg.commit_style)
     table.add_row("budget_cap_usd", str(cfg.budget_cap_usd) if cfg.budget_cap_usd else "none")
+    table.add_row("ignore_globs", ", ".join(cfg.ignore_globs) if cfg.ignore_globs else "none")
     table.add_row("api_key", "set" if key_set else "not set")
     console.print(table)
 
@@ -128,7 +134,11 @@ def config_show() -> None:
 @config_app.command("set")
 def config_set(field: str, value: str) -> None:
     """Set one field: model, commit_style, or budget_cap_usd (empty clears)."""
-    cfg = config_mod.load_config()
+    try:
+        cfg = config_mod.load_config()
+    except config_mod.ConfigError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
     match field:
         case "model":
             cfg.model = value

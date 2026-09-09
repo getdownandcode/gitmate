@@ -137,6 +137,13 @@ def _is_low_signal(path: str) -> bool:
     signal-to-noise for a commit message, so their patches go first when
     truncating. Char length stays the cost proxy inside and outside this
     group: exact per-file token counts would cost one paid API call each.
+
+    Deliberately separate from ignore_globs: that filter drops noise files
+    entirely and is user-configured (Phase 1); this only deprioritizes
+    already-extracted files when over budget, and they are always sent whole
+    when budget allows. The two lists answer different questions
+    ("never send" vs "drop first under pressure"), so they stay independent
+    even where patterns overlap.
     """
     posix = PurePosixPath(path)
     name = posix.name
@@ -221,7 +228,9 @@ class TokenBudgetManager:
             )
 
         # 2. Over budget: drop low-signal patches first (snapshots, tests,
-        # generated code), largest first inside and outside that group.
+        # generated code), largest first inside and outside that group. The
+        # tuple key exhausts the whole low-signal group before any normal
+        # file is touched, no matter how large the normal files are.
         candidates = [d for d in diffs if not d.is_binary and d.patch_text.strip()]
         candidates.sort(key=lambda d: (not _is_low_signal(d.path), -len(d.patch_text)))
 

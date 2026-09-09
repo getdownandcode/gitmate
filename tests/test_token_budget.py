@@ -442,3 +442,39 @@ def test_chunking_path_makes_no_extra_count_call() -> None:
     assert decision.strategy == BudgetStrategy.NEEDS_CHUNKING
     # 1 initial count + 1 per truncated file; the final total reuses the last one.
     assert len(counter.calls) == 3
+
+
+def test_low_signal_group_exhausted_before_normal_files() -> None:
+    # Budget forces two truncations: the snap must go first even though the
+    # normal file is larger, then spilling over to the largest normal file.
+    big = _make_diff(path="src/big.py", patch_text="n" * 300)
+    med = _make_diff(path="src/med.py", patch_text="m" * 200)
+    snap = _make_diff(path="tests/snap.snap", patch_text="s" * 150)
+    note = f"[patch omitted for size: +{snap.additions}/-{snap.deletions} lines]"
+    big_trunc = _make_diff(path="src/big.py", patch_text=note)
+    snap_trunc = _make_diff(path="tests/snap.snap", patch_text=note)
+    tokens_after_two = len(format_diff_for_counting([big_trunc, med, snap_trunc]))
+    counter = FakeTokenCounter(char_rate=1)
+    mgr = TokenBudgetManager(counter=counter, context_window=tokens_after_two + 2048 + 500)
+
+    decision = mgr.assess([big, med, snap])
+
+    assert decision.strategy == BudgetStrategy.TRUNCATED
+    # Entire low-signal group first (largest-first within it), then normals.
+    assert [d.path for d in decision.omitted_diffs] == ["tests/snap.snap", "src/big.py"]
+    by_path = {d.path: d for d in decision.included_diffs}
+    assert by_path["src/med.py"].patch_text == "m" * 200
+
+
+def test_many_guard_skipped_small_files_need_chunking() -> None:
+    # Each patch is shorter than its replacement note, so the guard skips
+    # every file — but the headers alone still exceed the budget.
+    diffs = [_make_diff(path=f"f{i}.py", patch_text="+x\n") for i in range(3)]
+    counter = FakeTokenCounter(char_rate=1)
+    mgr = TokenBudgetManager(counter=counter, context_window=2048 + 500 + 10)
+
+    decision = mgr.assess(diffs)
+
+    assert decision.strategy == BudgetStrategy.NEEDS_CHUNKING
+    assert decision.omitted_diffs == []
+    assert [d.patch_text for d in decision.included_diffs] == ["+x\n"] * 3

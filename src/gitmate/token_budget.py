@@ -94,12 +94,14 @@ class BudgetStrategy(str, Enum):
 class BudgetDecision:
     """Outcome of assessing a diff list against the token budget.
 
-    Aliasing contract: on the FITS path entries alias the caller's objects.
-    On truncate/chunk paths ``included_diffs`` are fresh copies (truncated
-    ones carry note placeholders); ``omitted_diffs`` always holds the
-    original objects with full patches preserved. ``included_diffs`` always
-    carries every input file, so ``len(included_diffs)`` is the file count
-    while the note counts full patches versus truncations.
+    Aliasing contract: on the FITS path entries in ``included_diffs`` alias
+    the caller's objects unchanged. On truncate and chunk paths, all entries
+    in ``included_diffs`` are fresh copies (via ``replace()``) so caller
+    objects are never mutated in-place; truncated files carry one-line note
+    placeholders. ``omitted_diffs`` always holds the original objects with full
+    patches preserved. ``included_diffs`` always carries every input file, so
+    ``len(included_diffs)`` is the file count while the note counts full patches
+    versus truncations.
     """
 
     strategy: BudgetStrategy
@@ -151,13 +153,15 @@ class TokenBudgetManager:
         self.counter = counter
         self.model = model
         self.context_window = context_window
-        if reserved_output_tokens < 0:
+        if context_window <= 0:
+            raise InvalidBudgetError(f"context_window must be positive ({context_window}).")
+        if reserved_output_tokens <= 0:
             raise InvalidBudgetError(
-                f"reserved_output_tokens must not be negative ({reserved_output_tokens})."
+                f"reserved_output_tokens must be positive ({reserved_output_tokens})."
             )
-        if default_template_overhead < 0:
+        if default_template_overhead <= 0:
             raise InvalidBudgetError(
-                f"default_template_overhead must not be negative ({default_template_overhead})."
+                f"default_template_overhead must be positive ({default_template_overhead})."
             )
         self.reserved_output_tokens = reserved_output_tokens
         self.default_template_overhead = default_template_overhead
@@ -178,8 +182,8 @@ class TokenBudgetManager:
         overhead = (
             template_overhead if template_overhead is not None else self.default_template_overhead
         )
-        if overhead < 0:
-            raise InvalidBudgetError(f"template_overhead must not be negative ({overhead}).")
+        if overhead <= 0:
+            raise InvalidBudgetError(f"template_overhead must be positive ({overhead}).")
         effective_budget = self.context_window - self.reserved_output_tokens - overhead
         if effective_budget <= 0:
             raise InvalidBudgetError(

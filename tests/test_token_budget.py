@@ -392,15 +392,25 @@ def test_non_positive_effective_budget_raises() -> None:
         mgr.assess([])
 
 
-def test_negative_budget_inputs_raise() -> None:
+def test_non_positive_budget_inputs_raise() -> None:
     counter = FakeTokenCounter()
     diff = _make_diff(path="a.py", patch_text="hello")
-    with pytest.raises(InvalidBudgetError, match="must not be negative"):
+    with pytest.raises(InvalidBudgetError, match="must be positive"):
+        TokenBudgetManager(counter=counter, context_window=0)
+    with pytest.raises(InvalidBudgetError, match="must be positive"):
+        TokenBudgetManager(counter=counter, context_window=-100)
+    with pytest.raises(InvalidBudgetError, match="must be positive"):
+        TokenBudgetManager(counter=counter, reserved_output_tokens=0)
+    with pytest.raises(InvalidBudgetError, match="must be positive"):
         TokenBudgetManager(counter=counter, reserved_output_tokens=-5)
-    with pytest.raises(InvalidBudgetError, match="must not be negative"):
+    with pytest.raises(InvalidBudgetError, match="must be positive"):
+        TokenBudgetManager(counter=counter, default_template_overhead=0)
+    with pytest.raises(InvalidBudgetError, match="must be positive"):
         TokenBudgetManager(counter=counter, default_template_overhead=-5)
     mgr = TokenBudgetManager(counter=counter, context_window=10_000)
-    with pytest.raises(InvalidBudgetError, match="must not be negative"):
+    with pytest.raises(InvalidBudgetError, match="must be positive"):
+        mgr.assess([diff], template_overhead=0)
+    with pytest.raises(InvalidBudgetError, match="must be positive"):
         mgr.assess([diff], template_overhead=-100)
 
 

@@ -94,12 +94,12 @@ class BudgetStrategy(str, Enum):
 class BudgetDecision:
     """Outcome of assessing a diff list against the token budget.
 
-    Aliasing contract: entries alias the caller's FileDiff objects, except
-    truncated replacements, which are fresh copies. In particular
-    ``omitted_diffs`` holds the originals (full patch preserved).
-    ``included_diffs`` always carries every input file; truncated ones appear
-    as one-line note placeholders, so ``len(included_diffs)`` is the file
-    count while the note counts full patches versus truncations.
+    Aliasing contract: on the FITS path entries alias the caller's objects.
+    On truncate/chunk paths ``included_diffs`` are fresh copies (truncated
+    ones carry note placeholders); ``omitted_diffs`` always holds the
+    original objects with full patches preserved. ``included_diffs`` always
+    carries every input file, so ``len(included_diffs)`` is the file count
+    while the note counts full patches versus truncations.
     """
 
     strategy: BudgetStrategy
@@ -151,6 +151,14 @@ class TokenBudgetManager:
         self.counter = counter
         self.model = model
         self.context_window = context_window
+        if reserved_output_tokens < 0:
+            raise InvalidBudgetError(
+                f"reserved_output_tokens must not be negative ({reserved_output_tokens})."
+            )
+        if default_template_overhead < 0:
+            raise InvalidBudgetError(
+                f"default_template_overhead must not be negative ({default_template_overhead})."
+            )
         self.reserved_output_tokens = reserved_output_tokens
         self.default_template_overhead = default_template_overhead
 
@@ -170,6 +178,8 @@ class TokenBudgetManager:
         overhead = (
             template_overhead if template_overhead is not None else self.default_template_overhead
         )
+        if overhead < 0:
+            raise InvalidBudgetError(f"template_overhead must not be negative ({overhead}).")
         effective_budget = self.context_window - self.reserved_output_tokens - overhead
         if effective_budget <= 0:
             raise InvalidBudgetError(

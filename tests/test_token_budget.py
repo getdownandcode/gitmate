@@ -392,6 +392,18 @@ def test_non_positive_effective_budget_raises() -> None:
         mgr.assess([])
 
 
+def test_negative_budget_inputs_raise() -> None:
+    counter = FakeTokenCounter()
+    diff = _make_diff(path="a.py", patch_text="hello")
+    with pytest.raises(InvalidBudgetError, match="must not be negative"):
+        TokenBudgetManager(counter=counter, reserved_output_tokens=-5)
+    with pytest.raises(InvalidBudgetError, match="must not be negative"):
+        TokenBudgetManager(counter=counter, default_template_overhead=-5)
+    mgr = TokenBudgetManager(counter=counter, context_window=10_000)
+    with pytest.raises(InvalidBudgetError, match="must not be negative"):
+        mgr.assess([diff], template_overhead=-100)
+
+
 def test_largest_patch_truncated_first() -> None:
     big = _make_diff(path="src/service.py", patch_text="n" * 300)
     small = _make_diff(path="tests/__snapshots__/app.snap", patch_text="s" * 150)

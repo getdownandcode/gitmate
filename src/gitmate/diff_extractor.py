@@ -196,18 +196,17 @@ def _parse_name_status(output: str) -> dict[str, tuple[FileStatus, str | None]]:
 
 
 def _split_header_fallback(rest: str) -> tuple[str | None, str | None]:
-    """Split `a/X b/Y` on the last ` b/`; prefixes are pinned by our git flags.
+    """Split `a/X b/Y` across quoted/unquoted combinations on either side.
 
-    Correct for any spaces inside X or Y. Only a filename literally containing
-    ` b/` defeats it; the rename/copy metadata and ---/+++ re-keying backstop
-    even that pathological case.
+    Our git flags pin the prefixes, so Y always begins `b/` or `"b/`, and
+    rfind lets the true boundary win over interior lookalikes. Rename/copy
+    metadata and ---/+++ re-keying backstop anything stranger still.
     """
-    if rest.startswith('"'):
-        # Both paths quoted: "a/X" "b/Y" — split between the quoted strings.
-        idx = rest.find('" "')
+    if rest.endswith('"'):
+        idx = rest.rfind(' "b/')
         if idx == -1:
             return None, None
-        return _strip_git_prefix(rest[: idx + 1]), _strip_git_prefix(rest[idx + 1 :].strip())
+        return _strip_git_prefix(rest[:idx]), _strip_git_prefix(rest[idx + 1 :])
     idx = rest.rfind(" b/")
     if idx < 2:
         return None, None
@@ -289,11 +288,13 @@ def _parse_patch(output: str) -> dict[str, str]:
     def flush() -> None:
         nonlocal current, minus
         if current is not None or minus is not None:
+            # Rename/copy lines carry bare paths (never a//b/ prefixed), so
+            # decode quoting only; stripping would eat real a//b/ directories.
             for cl in chunk:
                 if cl.startswith(("rename to ", "copy to ")):
-                    current = _strip_git_prefix(cl.split(" ", 2)[2].rstrip("\n"))
+                    current = _decode_quoted(cl.split(" ", 2)[2].rstrip("\n"))
                 elif cl.startswith(("rename from ", "copy from ")):
-                    minus = _strip_git_prefix(cl.split(" ", 2)[2].rstrip("\n"))
+                    minus = _decode_quoted(cl.split(" ", 2)[2].rstrip("\n"))
             key = current if current is not None and current != "/dev/null" else minus
             if key is not None:
                 if key not in chunks:

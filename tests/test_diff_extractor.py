@@ -228,3 +228,33 @@ def test_non_utf8_git_output_clean_error(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
     with pytest.raises(GitCommandError):
         DiffExtractor(tmp_path).staged()
+
+
+def test_rename_plain_to_quoted_keeps_patch(git_repo: Path) -> None:
+    commit_file(git_repo, "plain.txt", "line 1\n", "add plain")
+    subprocess.run(["git", "mv", "plain.txt", 'weird"name.txt'], cwd=git_repo, check=True)
+    (git_repo / 'weird"name.txt').write_text("line 1\nline 2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=git_repo, check=True)
+    (diff,) = DiffExtractor(git_repo).staged()
+    assert (diff.path, diff.old_path, diff.status) == ('weird"name.txt', "plain.txt", "renamed")
+    assert "+line 2" in diff.patch_text
+
+
+def test_rename_quoted_to_plain_keeps_patch(git_repo: Path) -> None:
+    commit_file(git_repo, 'weird"name.txt', "line 1\n", "add weird")
+    subprocess.run(["git", "mv", 'weird"name.txt', "plain.txt"], cwd=git_repo, check=True)
+    (git_repo / "plain.txt").write_text("line 1\nline 2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=git_repo, check=True)
+    (diff,) = DiffExtractor(git_repo).staged()
+    assert (diff.path, diff.old_path, diff.status) == ("plain.txt", 'weird"name.txt', "renamed")
+    assert "+line 2" in diff.patch_text
+
+
+def test_pure_rename_into_a_dir_keeps_patch(git_repo: Path) -> None:
+    commit_file(git_repo, "old.py", "line 1\n", "add old")
+    (git_repo / "a").mkdir()
+    subprocess.run(["git", "mv", "old.py", "a/foo.py"], cwd=git_repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=git_repo, check=True)
+    (diff,) = DiffExtractor(git_repo).staged()
+    assert (diff.path, diff.old_path, diff.status) == ("a/foo.py", "old.py", "renamed")
+    assert "rename to a/foo.py" in diff.patch_text

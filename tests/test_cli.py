@@ -58,6 +58,16 @@ def test_config_set_field_persists(tmp_config_dir: Path) -> None:
     assert load_config().model == "my-model"
 
 
+def test_config_show_displays_zero_budget(
+    tmp_config_dir: Path, mem_store: InMemorySecretStore
+) -> None:
+    result = runner.invoke(cli.app, ["config", "set", "budget_cap_usd", "0"])
+    assert result.exit_code == 0
+    result = runner.invoke(cli.app, ["config", "show"])
+    assert result.exit_code == 0
+    assert "0.0" in result.output
+
+
 def test_config_set_unknown_field_fails(tmp_config_dir: Path) -> None:
     result = runner.invoke(cli.app, ["config", "set", "nope", "x"])
     assert result.exit_code != 0

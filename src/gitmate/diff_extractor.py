@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -72,11 +73,15 @@ class SubprocessGitRunner:
                 text=True,
                 timeout=self._timeout,
                 check=False,
+                # Deterministic English errors regardless of host locale.
+                env={**os.environ, "LC_ALL": "C"},
             )
         except FileNotFoundError as exc:
             raise GitCommandError("git binary not found on PATH.") from exc
         except subprocess.TimeoutExpired as exc:
             raise GitCommandError(f"git {' '.join(args)} timed out.") from exc
+        except UnicodeDecodeError as exc:
+            raise GitCommandError(f"git {' '.join(args)} output was not valid UTF-8.") from exc
         if proc.returncode != 0:
             err = proc.stderr.strip()
             if "not a git repository" in err:
@@ -85,17 +90,25 @@ class SubprocessGitRunner:
         return proc.stdout
 
 
+def _dir_match(posix: str, dirname: str) -> bool:
+    """True when dirname is the path itself or any parent directory in it."""
+    return posix == dirname or posix.startswith(dirname + "/") or f"/{dirname}/" in f"/{posix}"
+
+
 def matches_any(path: str, patterns: Iterable[str]) -> bool:
-    """Gitignore-flavored match: dir prefixes, bare basenames, else fnmatch."""
+    """Gitignore-flavored match: dir prefixes, bare basenames, else fnmatch.
+
+    Directory patterns (`dist/`, `dist/*`) match at any depth, so monorepo
+    `packages/ui/dist/` output is filtered just like root-level `dist/`.
+    """
     posix = PurePosixPath(path).as_posix()
     name = PurePosixPath(path).name
     for pat in patterns:
         if pat.endswith("/*"):
-            prefix = pat[:-1]
-            if posix == prefix[:-1] or posix.startswith(prefix):
+            if _dir_match(posix, pat[:-2]):
                 return True
         elif pat.endswith("/"):
-            if posix == pat[:-1] or posix.startswith(pat):
+            if _dir_match(posix, pat[:-1]):
                 return True
         elif "/" not in pat:
             if fnmatchcase(name, pat):
@@ -174,18 +187,91 @@ def _parse_name_status(output: str) -> dict[str, tuple[FileStatus, str | None]]:
             if len(parts) != 3:
                 raise GitCommandError(f"cannot parse rename/copy row: {line!r}.")
             _, old, new = parts
-            statuses[new] = (status, old)
+            statuses[_decode_quoted(new)] = (status, _decode_quoted(old))
         else:
             if len(parts) != 2:
                 raise GitCommandError(f"cannot parse status row: {line!r}.")
-            statuses[parts[1]] = (status, None)
+            statuses[_decode_quoted(parts[1])] = (status, None)
     return statuses
 
 
-def _strip_git_prefix(path: str) -> str:
-    """Strip git's a//b/ prefixes and optional C-style quoting."""
+def _split_header_fallback(rest: str) -> tuple[str | None, str | None]:
+    """Split `a/X b/Y` across quoted/unquoted combinations on either side.
+
+    Our git flags pin the prefixes, so Y always begins `b/` or `"b/`, and
+    rfind lets the true boundary win over interior lookalikes. Rename/copy
+    metadata and ---/+++ re-keying backstop anything stranger still.
+    """
+    if rest.endswith('"'):
+        idx = rest.rfind(' "b/')
+        if idx == -1:
+            return None, None
+        return _strip_git_prefix(rest[:idx]), _strip_git_prefix(rest[idx + 1 :])
+    idx = rest.rfind(" b/")
+    if idx < 2:
+        return None, None
+    return _strip_git_prefix(rest[:idx]), _strip_git_prefix(rest[idx + 1 :])
+
+
+def _unescape_c_quoting(text: str) -> str:
+    """Decode git's C-style path escapes (`\\\\`, `\\"`, `\\n`, `\\t`, octal).
+
+    Only meaningful on paths git quoted; unquoted output (e.g. `-z --numstat`)
+    is never munged and must pass through untouched. Octal runs decode as
+    UTF-8 bytes because git escapes non-ASCII per byte, not per character.
+    """
+    out: list[str] = []
+    raw = bytearray()
+
+    def flush_octal() -> None:
+        if raw:
+            out.append(bytes(raw).decode("utf-8", errors="surrogateescape"))
+            raw.clear()
+
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch != "\\" or i + 1 >= n:
+            flush_octal()
+            out.append(ch)
+            i += 1
+            continue
+        nxt = text[i + 1]
+        if nxt in "01234567":
+            digits = text[i + 1 : i + 4]
+            length = 0
+            while length < 3 and length < len(digits) and digits[length] in "01234567":
+                length += 1
+            raw.extend(int(digits[:length], 8).to_bytes(1, "big"))
+            i += 1 + length
+            continue
+        flush_octal()
+        if nxt == "n":
+            out.append("\n")
+        elif nxt == "t":
+            out.append("\t")
+        elif nxt == "\\":
+            out.append("\\")
+        elif nxt == '"':
+            out.append('"')
+        else:
+            out.append(ch)
+            out.append(nxt)
+        i += 2
+    flush_octal()
+    return "".join(out)
+
+
+def _decode_quoted(path: str) -> str:
+    """Remove git's C-style quoting when present; bare paths pass through."""
     if len(path) >= 2 and path.startswith('"') and path.endswith('"'):
-        path = path[1:-1]
+        return _unescape_c_quoting(path[1:-1])
+    return path
+
+
+def _strip_git_prefix(path: str) -> str:
+    """Strip git's a//b/ prefixes, unescaping C-style quoting when present."""
+    path = _decode_quoted(path)
     if path.startswith(("a/", "b/")):
         return path[2:]
     return path
@@ -202,11 +288,13 @@ def _parse_patch(output: str) -> dict[str, str]:
     def flush() -> None:
         nonlocal current, minus
         if current is not None or minus is not None:
+            # Rename/copy lines carry bare paths (never a//b/ prefixed), so
+            # decode quoting only; stripping would eat real a//b/ directories.
             for cl in chunk:
                 if cl.startswith(("rename to ", "copy to ")):
-                    current = _strip_git_prefix(cl.split(" ", 2)[2].rstrip("\n"))
+                    current = _decode_quoted(cl.split(" ", 2)[2].rstrip("\n"))
                 elif cl.startswith(("rename from ", "copy from ")):
-                    minus = _strip_git_prefix(cl.split(" ", 2)[2].rstrip("\n"))
+                    minus = _decode_quoted(cl.split(" ", 2)[2].rstrip("\n"))
             key = current if current is not None and current != "/dev/null" else minus
             if key is not None:
                 if key not in chunks:
@@ -224,13 +312,9 @@ def _parse_patch(output: str) -> dict[str, str]:
                     minus = _strip_git_prefix(rest[2:mid])
                     current = _strip_git_prefix(rest[mid + 3 :])
                 else:
-                    halves = rest.rsplit(" ", 1)
-                    minus = _strip_git_prefix(halves[0].strip()) if len(halves) == 2 else None
-                    current = _strip_git_prefix(halves[1].strip()) if len(halves) == 2 else None
+                    minus, current = _split_header_fallback(rest)
             else:
-                halves = rest.rsplit(" ", 1)
-                minus = _strip_git_prefix(halves[0].strip()) if len(halves) == 2 else None
-                current = _strip_git_prefix(halves[1].strip()) if len(halves) == 2 else None
+                minus, current = _split_header_fallback(rest)
             chunk = [line]
         elif current is None and minus is None:
             continue
@@ -248,6 +332,7 @@ def _parse_patch(output: str) -> dict[str, str]:
                     for prev in text.splitlines():
                         if prev.startswith("--- "):
                             key = _strip_git_prefix(prev[4:].strip())
+                            break
                 else:
                     key = plus
                 break

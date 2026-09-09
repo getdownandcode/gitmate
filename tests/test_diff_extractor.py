@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -88,6 +89,9 @@ def test_matcher_rules() -> None:
     assert matches_any("a/b/c.min.js", ["*.min.js"])
     assert not matches_any("src/app.py", ["dist/*", "*.min.js"])
     assert matches_any("out/log.txt", ["out/"])
+    assert matches_any("packages/ui/dist/bundle.js", ["dist/*"])
+    assert matches_any("packages/ui/dist/bundle.js", ["dist/"])
+    assert not matches_any("src/distraction.py", ["dist/*"])
 
 
 def test_branch_comparison(git_repo: Path) -> None:
@@ -178,3 +182,49 @@ def test_pure_rename_with_spaces(git_repo: Path) -> None:
 def test_copy_status_row() -> None:
     statuses = _parse_name_status("C100\told.py\tnew.py\n")
     assert statuses["new.py"] == ("added", "old.py")
+
+
+def test_nested_monorepo_dist_filtered(git_repo: Path) -> None:
+    stage_file(git_repo, "packages/ui/dist/bundle.js", b"var x;\n")
+    stage_file(git_repo, "src/ok.py", b"ok\n")
+    (diff,) = DiffExtractor(git_repo).staged()
+    assert diff.path == "src/ok.py"
+
+
+def test_deleted_file_with_dash_comments_keeps_patch(git_repo: Path) -> None:
+    commit_file(git_repo, "query.sql", "SELECT 1;\n-- a comment\n", "add sql")
+    subprocess.run(["git", "rm", "query.sql"], cwd=git_repo, check=True)
+    (diff,) = DiffExtractor(git_repo).staged()
+    assert (diff.path, diff.status) == ("query.sql", "deleted")
+    assert "diff --git a/query.sql b/query.sql" in diff.patch_text
+    assert "-- a comment" in diff.patch_text
+
+
+def test_backslash_filename_single_entry(git_repo: Path) -> None:
+    # A literal backslash is always C-quoted by git, even with quotepath=false;
+    # the entry must align with the raw -z numstat key, not duplicate.
+    stage_file(git_repo, "back\\slash.py", b"x = 1\n")
+    (diff,) = DiffExtractor(git_repo).staged()
+    assert diff.path == "back\\slash.py"
+    assert (diff.status, diff.additions) == ("added", 1)
+    assert "+x = 1" in diff.patch_text
+
+
+def test_double_quote_filename_single_entry(git_repo: Path) -> None:
+    stage_file(git_repo, 'we"ird.py', b"x = 1\n")
+    (diff,) = DiffExtractor(git_repo).staged()
+    assert diff.path == 'we"ird.py'
+    assert diff.additions == 1
+
+
+def test_non_utf8_git_output_clean_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # macOS refuses to create non-UTF-8 filenames, so fake the git binary
+    # itself emitting invalid bytes instead.
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "git"
+    fake.write_bytes(b"#!/bin/sh\nprintf 'x\\377y'\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    with pytest.raises(GitCommandError):
+        DiffExtractor(tmp_path).staged()

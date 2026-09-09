@@ -66,6 +66,9 @@ Thumbs.db
 *.log
 *.tmp
 
+# Agent tooling droppings (not part of this project)
+.agents/
+
 #md files
 plan.md
 

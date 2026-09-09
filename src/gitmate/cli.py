@@ -125,7 +125,9 @@ def config_show() -> None:
     table.add_row("config file", str(config_mod.config_path()))
     table.add_row("model", cfg.model)
     table.add_row("commit_style", cfg.commit_style)
-    table.add_row("budget_cap_usd", str(cfg.budget_cap_usd) if cfg.budget_cap_usd else "none")
+    table.add_row(
+        "budget_cap_usd", str(cfg.budget_cap_usd) if cfg.budget_cap_usd is not None else "none"
+    )
     table.add_row("ignore_globs", ", ".join(cfg.ignore_globs) if cfg.ignore_globs else "none")
     table.add_row("api_key", "set" if key_set else "not set")
     console.print(table)

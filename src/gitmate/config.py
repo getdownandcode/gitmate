@@ -50,6 +50,7 @@ class GitmateConfig:
     ignore_globs: list[str] = field(default_factory=list)
     max_context_tokens: int | None = None
     reserved_output_tokens: int = DEFAULT_RESERVED_OUTPUT_TOKENS
+    template_overhead: int = DEFAULT_TEMPLATE_OVERHEAD
 
 
 class SecretStore(Protocol):
@@ -161,10 +162,17 @@ def load_config(path: Path | None = None) -> GitmateConfig:
         )
     reserved = reserved_raw
 
-    if max_ctx is not None and max_ctx <= reserved:
+    overhead_raw = raw.get("template_overhead", DEFAULT_TEMPLATE_OVERHEAD)
+    if isinstance(overhead_raw, bool) or not isinstance(overhead_raw, int) or overhead_raw <= 0:
+        raise ConfigError(
+            f"cannot parse {resolved}: 'template_overhead' must be a positive integer"
+        )
+    overhead = overhead_raw
+
+    if max_ctx is not None and max_ctx <= (reserved + overhead):
         raise ConfigError(
             f"cannot parse {resolved}: 'max_context_tokens' ({max_ctx}) must be greater "
-            f"than 'reserved_output_tokens' ({reserved})"
+            f"than 'reserved_output_tokens' + 'template_overhead' ({reserved + overhead})"
         )
 
     return GitmateConfig(
@@ -174,6 +182,7 @@ def load_config(path: Path | None = None) -> GitmateConfig:
         ignore_globs=globs,
         max_context_tokens=max_ctx,
         reserved_output_tokens=reserved,
+        template_overhead=overhead,
     )
 
 
@@ -190,4 +199,6 @@ def save_config(cfg: GitmateConfig, path: Path | None = None) -> None:
         data["max_context_tokens"] = cfg.max_context_tokens
     if cfg.reserved_output_tokens != DEFAULT_RESERVED_OUTPUT_TOKENS:
         data["reserved_output_tokens"] = cfg.reserved_output_tokens
+    if cfg.template_overhead != DEFAULT_TEMPLATE_OVERHEAD:
+        data["template_overhead"] = cfg.template_overhead
     resolved.write_text(tomli_w.dumps(data), encoding="utf-8")

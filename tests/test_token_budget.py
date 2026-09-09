@@ -11,6 +11,7 @@ from gitmate.token_budget import (
     BudgetDecision,
     BudgetStrategy,
     GeminiTokenCounter,
+    InvalidBudgetError,
     NoApiKeyError,
     TokenBudgetManager,
     TokenCounter,
@@ -381,35 +382,33 @@ def test_non_positive_effective_budget_raises() -> None:
     diff = _make_diff(path="a.py", patch_text="hello")
     # reserved alone exceeds the window
     mgr = TokenBudgetManager(counter=counter, context_window=1000, reserved_output_tokens=2048)
-    with pytest.raises(ValueError, match="not positive"):
+    with pytest.raises(InvalidBudgetError, match="not positive"):
         mgr.assess([diff])
     # per-call overhead can also zero it out
     mgr = TokenBudgetManager(counter=counter, context_window=2548)
-    with pytest.raises(ValueError, match="not positive"):
+    with pytest.raises(InvalidBudgetError, match="not positive"):
         mgr.assess([diff])
-    with pytest.raises(ValueError, match="not positive"):
+    with pytest.raises(InvalidBudgetError, match="not positive"):
         mgr.assess([])
 
 
-def test_low_signal_truncated_before_larger_normal() -> None:
-    normal = _make_diff(path="src/service.py", patch_text="n" * 300)
-    snap = _make_diff(path="tests/__snapshots__/app.snap", patch_text="s" * 150)
-    truncated_snap = _make_diff(
-        path="tests/__snapshots__/app.snap",
-        patch_text=f"[patch omitted for size: +{snap.additions}/-{snap.deletions} lines]",
+def test_largest_patch_truncated_first() -> None:
+    big = _make_diff(path="src/service.py", patch_text="n" * 300)
+    small = _make_diff(path="tests/__snapshots__/app.snap", patch_text="s" * 150)
+    truncated_big = _make_diff(
+        path="src/service.py",
+        patch_text=f"[patch omitted for size: +{big.additions}/-{big.deletions} lines]",
     )
-    tokens_with_snap_truncated = len(format_diff_for_counting([normal, truncated_snap]))
+    tokens_with_big_truncated = len(format_diff_for_counting([truncated_big, small]))
     counter = FakeTokenCounter(char_rate=1)
-    mgr = TokenBudgetManager(
-        counter=counter, context_window=tokens_with_snap_truncated + 2048 + 500
-    )
+    mgr = TokenBudgetManager(counter=counter, context_window=tokens_with_big_truncated + 2048 + 500)
 
-    decision = mgr.assess([normal, snap])
+    decision = mgr.assess([small, big])
 
     assert decision.strategy == BudgetStrategy.TRUNCATED
-    assert [d.path for d in decision.omitted_diffs] == ["tests/__snapshots__/app.snap"]
+    assert [d.path for d in decision.omitted_diffs] == ["src/service.py"]
     by_path = {d.path: d for d in decision.included_diffs}
-    assert by_path["src/service.py"].patch_text == "n" * 300
+    assert by_path["tests/__snapshots__/app.snap"].patch_text == "s" * 150
 
 
 def test_duplicate_paths_each_processed() -> None:
@@ -444,26 +443,27 @@ def test_chunking_path_makes_no_extra_count_call() -> None:
     assert len(counter.calls) == 3
 
 
-def test_low_signal_group_exhausted_before_normal_files() -> None:
-    # Budget forces two truncations: the snap must go first even though the
-    # normal file is larger, then spilling over to the largest normal file.
-    big = _make_diff(path="src/big.py", patch_text="n" * 300)
-    med = _make_diff(path="src/med.py", patch_text="m" * 200)
-    snap = _make_diff(path="tests/snap.snap", patch_text="s" * 150)
-    note = f"[patch omitted for size: +{snap.additions}/-{snap.deletions} lines]"
-    big_trunc = _make_diff(path="src/big.py", patch_text=note)
-    snap_trunc = _make_diff(path="tests/snap.snap", patch_text=note)
-    tokens_after_two = len(format_diff_for_counting([big_trunc, med, snap_trunc]))
+def test_candidates_truncated_strictly_in_descending_size_order() -> None:
+    # Three candidate diffs of descending patch size: 400, 250, 100 chars.
+    # When budget allows only 1 file intact, the 400 and 250 files are truncated in order.
+    big = _make_diff(path="src/big.py", patch_text="b" * 400)
+    med = _make_diff(path="src/med.py", patch_text="m" * 250)
+    small = _make_diff(path="src/small.py", patch_text="s" * 100)
+    note_big = f"[patch omitted for size: +{big.additions}/-{big.deletions} lines]"
+    note_med = f"[patch omitted for size: +{med.additions}/-{med.deletions} lines]"
+    big_trunc = _make_diff(path="src/big.py", patch_text=note_big)
+    med_trunc = _make_diff(path="src/med.py", patch_text=note_med)
+    tokens_after_two = len(format_diff_for_counting([big_trunc, med_trunc, small]))
     counter = FakeTokenCounter(char_rate=1)
     mgr = TokenBudgetManager(counter=counter, context_window=tokens_after_two + 2048 + 500)
 
-    decision = mgr.assess([big, med, snap])
+    decision = mgr.assess([small, med, big])
 
     assert decision.strategy == BudgetStrategy.TRUNCATED
-    # Entire low-signal group first (largest-first within it), then normals.
-    assert [d.path for d in decision.omitted_diffs] == ["tests/snap.snap", "src/big.py"]
+    # Largest patches dropped first: big (400), then med (250).
+    assert [d.path for d in decision.omitted_diffs] == ["src/big.py", "src/med.py"]
     by_path = {d.path: d for d in decision.included_diffs}
-    assert by_path["src/med.py"].patch_text == "m" * 200
+    assert by_path["src/small.py"].patch_text == "s" * 100
 
 
 def test_many_guard_skipped_small_files_need_chunking() -> None:
@@ -478,3 +478,21 @@ def test_many_guard_skipped_small_files_need_chunking() -> None:
     assert decision.strategy == BudgetStrategy.NEEDS_CHUNKING
     assert decision.omitted_diffs == []
     assert [d.patch_text for d in decision.included_diffs] == ["+x\n"] * 3
+
+
+def test_mixed_truncated_and_guarded_diffs_trigger_needs_chunking() -> None:
+    # 1 large file is truncated, but 2 small files are guard-skipped and remaining
+    # diff still exceeds the effective budget.
+    big = _make_diff(path="big.py", patch_text="b" * 300)
+    small1 = _make_diff(path="s1.py", patch_text="+x\n")
+    small2 = _make_diff(path="s2.py", patch_text="+y\n")
+    counter = FakeTokenCounter(char_rate=1)
+    # Effective budget 10: even with big truncated, remaining tokens exceed 10
+    mgr = TokenBudgetManager(counter=counter, context_window=2048 + 500 + 10)
+
+    decision = mgr.assess([big, small1, small2])
+
+    assert decision.strategy == BudgetStrategy.NEEDS_CHUNKING
+    assert [d.path for d in decision.omitted_diffs] == ["big.py"]
+    # Ratio format: 1 of 3 files truncated, NOT "even with all 1 files truncated"
+    assert "even with 1/3 files truncated; requires chunking" in decision.summary_note

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
-from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from gitmate.config import (
@@ -20,6 +19,10 @@ if TYPE_CHECKING:
 
 class TokenBudgetError(Exception):
     """Base exception for token budgeting and counting errors."""
+
+
+class InvalidBudgetError(TokenBudgetError):
+    """Raised when the calculated effective budget is non-positive."""
 
 
 class TokenCountError(TokenBudgetError):
@@ -126,41 +129,16 @@ def format_diff_for_counting(diffs: list[FileDiff]) -> str:
     return "\n\n".join(parts)
 
 
-_LOW_SIGNAL_SUFFIXES = (".snap", ".snapshot", ".min.js", ".bundle.js", ".map")
-_TEST_DIR_NAMES = frozenset({"test", "tests"})
-
-
-def _is_low_signal(path: str) -> bool:
-    """True for files whose full patch is least informative if dropped.
-
-    Test snapshots, test files, and generated bundles carry the lowest
-    signal-to-noise for a commit message, so their patches go first when
-    truncating. Char length stays the cost proxy inside and outside this
-    group: exact per-file token counts would cost one paid API call each.
-
-    Deliberately separate from ignore_globs: that filter drops noise files
-    entirely and is user-configured (Phase 1); this only deprioritizes
-    already-extracted files when over budget, and they are always sent whole
-    when budget allows. The two lists answer different questions
-    ("never send" vs "drop first under pressure"), so they stay independent
-    even where patterns overlap.
-    """
-    posix = PurePosixPath(path)
-    name = posix.name
-    if name.endswith(_LOW_SIGNAL_SUFFIXES):
-        return True
-    if _TEST_DIR_NAMES.intersection(posix.parts):
-        return True
-    if name.startswith("test_") or "_test." in name or ".test." in name:
-        return True
-    if ".spec." in name or ".generated." in name:
-        return True
-    stem = name.rsplit(".", 1)[0]
-    return stem.endswith(("_generated", ".generated"))
-
-
 class TokenBudgetManager:
-    """Manages token allocation, deciding whether diffs fit, truncate, or chunk."""
+    """Manages token allocation, deciding whether diffs fit, truncate, or chunk.
+
+    Truncation orders candidate diffs strictly by descending patch length
+    (largest raw patch first). Signal weighting was evaluated, but common
+    generated artifacts and lockfiles are already filtered upstream by
+    ignore_globs; its only non-redundant contribution (test-directory
+    deprioritization) was actively harmful, stripping critical test diffs in
+    test-focused commits. Reverted to size-only ordering as the deliberate policy.
+    """
 
     def __init__(
         self,
@@ -194,7 +172,7 @@ class TokenBudgetManager:
         )
         effective_budget = self.context_window - self.reserved_output_tokens - overhead
         if effective_budget <= 0:
-            raise ValueError(
+            raise InvalidBudgetError(
                 f"token budget is not positive ({effective_budget}); "
                 "context_window must exceed reserved_output_tokens + template_overhead."
             )
@@ -227,12 +205,9 @@ class TokenBudgetManager:
                 summary_note=f"included {len(diffs)}/{len(diffs)} files",
             )
 
-        # 2. Over budget: drop low-signal patches first (snapshots, tests,
-        # generated code), largest first inside and outside that group. The
-        # tuple key exhausts the whole low-signal group before any normal
-        # file is touched, no matter how large the normal files are.
+        # 2. Over budget: drop largest patches first.
         candidates = [d for d in diffs if not d.is_binary and d.patch_text.strip()]
-        candidates.sort(key=lambda d: (not _is_low_signal(d.path), -len(d.patch_text)))
+        candidates.sort(key=lambda d: len(d.patch_text), reverse=True)
 
         current_diffs = [replace(d) for d in diffs]
         working = {id(orig): copy for orig, copy in zip(diffs, current_diffs)}
@@ -265,8 +240,10 @@ class TokenBudgetManager:
         # 3. Even with all candidates truncated, remaining metadata exceeds budget.
         # current_tokens already holds the last recount (or the full count when
         # nothing was truncated), so no extra paid count call is needed here.
-        if omitted:
-            trunc_info = f" even with all {len(omitted)} files truncated"
+        if len(omitted) == len(diffs):
+            trunc_info = f" even with all {len(diffs)} files truncated"
+        elif omitted:
+            trunc_info = f" even with {len(omitted)}/{len(diffs)} files truncated"
         else:
             trunc_info = ""
         return BudgetDecision(

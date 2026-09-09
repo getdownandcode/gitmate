@@ -97,11 +97,16 @@ def test_get_context_window_unknown_model_with_override() -> None:
 
 
 def test_budget_config_round_trip(tmp_config_dir: Path) -> None:
-    cfg = GitmateConfig(max_context_tokens=64_000, reserved_output_tokens=4096)
+    cfg = GitmateConfig(
+        max_context_tokens=64_000,
+        reserved_output_tokens=4096,
+        template_overhead=800,
+    )
     save_config(cfg)
     loaded = load_config()
     assert loaded.max_context_tokens == 64_000
     assert loaded.reserved_output_tokens == 4096
+    assert loaded.template_overhead == 800
 
 
 @pytest.mark.parametrize("val", ['"big"', "true", "-100", "0"])
@@ -120,11 +125,22 @@ def test_invalid_reserved_output_tokens_raises(tmp_config_dir: Path, val: str) -
         load_config()
 
 
-def test_max_context_tokens_must_exceed_reserved(tmp_config_dir: Path) -> None:
+@pytest.mark.parametrize("val", ['"big"', "false", "-50", "0"])
+def test_invalid_template_overhead_raises(tmp_config_dir: Path, val: str) -> None:
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(f"template_overhead = {val}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="'template_overhead' must be a positive integer"):
+        load_config()
+
+
+def test_max_context_tokens_must_exceed_reserved_plus_overhead(tmp_config_dir: Path) -> None:
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
-        "max_context_tokens = 1000\nreserved_output_tokens = 2000\n",
+        "max_context_tokens = 2200\nreserved_output_tokens = 2048\n",
         encoding="utf-8",
     )
-    with pytest.raises(ConfigError, match="must be greater than 'reserved_output_tokens'"):
+    with pytest.raises(
+        ConfigError,
+        match="must be greater than 'reserved_output_tokens' \\+ 'template_overhead'",
+    ):
         load_config()

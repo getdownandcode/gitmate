@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from gitmate.config import (
@@ -88,7 +89,15 @@ class BudgetStrategy(str, Enum):
 
 @dataclass
 class BudgetDecision:
-    """Outcome of assessing a diff list against the token budget."""
+    """Outcome of assessing a diff list against the token budget.
+
+    Aliasing contract: entries alias the caller's FileDiff objects, except
+    truncated replacements, which are fresh copies. In particular
+    ``omitted_diffs`` holds the originals (full patch preserved).
+    ``included_diffs`` always carries every input file; truncated ones appear
+    as one-line note placeholders, so ``len(included_diffs)`` is the file
+    count while the note counts full patches versus truncations.
+    """
 
     strategy: BudgetStrategy
     included_diffs: list[FileDiff]
@@ -115,6 +124,32 @@ def format_diff_for_counting(diffs: list[FileDiff]) -> str:
         else:
             parts.append(f"{header}\n[empty or omitted]")
     return "\n\n".join(parts)
+
+
+_LOW_SIGNAL_SUFFIXES = (".snap", ".snapshot", ".min.js", ".bundle.js", ".map")
+_TEST_DIR_NAMES = frozenset({"test", "tests"})
+
+
+def _is_low_signal(path: str) -> bool:
+    """True for files whose full patch is least informative if dropped.
+
+    Test snapshots, test files, and generated bundles carry the lowest
+    signal-to-noise for a commit message, so their patches go first when
+    truncating. Char length stays the cost proxy inside and outside this
+    group: exact per-file token counts would cost one paid API call each.
+    """
+    posix = PurePosixPath(path)
+    name = posix.name
+    if name.endswith(_LOW_SIGNAL_SUFFIXES):
+        return True
+    if _TEST_DIR_NAMES.intersection(posix.parts):
+        return True
+    if name.startswith("test_") or "_test." in name or ".test." in name:
+        return True
+    if ".spec." in name or ".generated." in name:
+        return True
+    stem = name.rsplit(".", 1)[0]
+    return stem.endswith(("_generated", ".generated"))
 
 
 class TokenBudgetManager:
@@ -151,6 +186,11 @@ class TokenBudgetManager:
             template_overhead if template_overhead is not None else self.default_template_overhead
         )
         effective_budget = self.context_window - self.reserved_output_tokens - overhead
+        if effective_budget <= 0:
+            raise ValueError(
+                f"token budget is not positive ({effective_budget}); "
+                "context_window must exceed reserved_output_tokens + template_overhead."
+            )
 
         if not diffs:
             return BudgetDecision(
@@ -180,32 +220,22 @@ class TokenBudgetManager:
                 summary_note=f"included {len(diffs)}/{len(diffs)} files",
             )
 
-        # 2. Over budget: sort candidates by descending patch length to drop largest first
+        # 2. Over budget: drop low-signal patches first (snapshots, tests,
+        # generated code), largest first inside and outside that group.
         candidates = [d for d in diffs if not d.is_binary and d.patch_text.strip()]
-        candidates.sort(key=lambda d: len(d.patch_text), reverse=True)
+        candidates.sort(key=lambda d: (not _is_low_signal(d.path), -len(d.patch_text)))
 
-        current_diffs = [
-            FileDiff(
-                path=d.path,
-                old_path=d.old_path,
-                status=d.status,
-                additions=d.additions,
-                deletions=d.deletions,
-                patch_text=d.patch_text,
-                is_binary=d.is_binary,
-            )
-            for d in diffs
-        ]
-        diff_index = {d.path: d for d in current_diffs}
+        current_diffs = [replace(d) for d in diffs]
+        working = {id(orig): copy for orig, copy in zip(diffs, current_diffs)}
         omitted: list[FileDiff] = []
+        current_tokens = total_tokens
 
         for candidate in candidates:
             note = f"[patch omitted for size: +{candidate.additions}/-{candidate.deletions} lines]"
             if len(candidate.patch_text) <= len(note):
                 continue
             omitted.append(candidate)
-            target = diff_index[candidate.path]
-            target.patch_text = note
+            working[id(candidate)].patch_text = note
             current_tokens = self.count_diff_tokens(current_diffs)
             if current_tokens <= effective_budget:
                 included_count = len(diffs) - len(omitted)
@@ -223,8 +253,9 @@ class TokenBudgetManager:
                     ),
                 )
 
-        # 3. Even with all candidates truncated, remaining metadata exceeds budget
-        final_tokens = self.count_diff_tokens(current_diffs)
+        # 3. Even with all candidates truncated, remaining metadata exceeds budget.
+        # current_tokens already holds the last recount (or the full count when
+        # nothing was truncated), so no extra paid count call is needed here.
         if omitted:
             trunc_info = f" even with all {len(omitted)} files truncated"
         else:
@@ -233,13 +264,13 @@ class TokenBudgetManager:
             strategy=BudgetStrategy.NEEDS_CHUNKING,
             included_diffs=current_diffs,
             omitted_diffs=omitted,
-            total_tokens=final_tokens,
+            total_tokens=current_tokens,
             budget_limit=effective_budget,
             reserved_output_tokens=self.reserved_output_tokens,
             template_overhead=overhead,
             model=self.model,
             summary_note=(
-                f"diff exceeded budget ({final_tokens} > {effective_budget} tokens)"
+                f"diff exceeded budget ({current_tokens} > {effective_budget} tokens)"
                 f"{trunc_info}; requires chunking"
             ),
         )

@@ -374,3 +374,71 @@ def test_gemini_token_counter_lazy_client_init(monkeypatch: pytest.MonkeyPatch) 
     result = counter.count_tokens("hello", "gemini-flash")
     assert result == 15
     mock_client_cls.assert_called_once_with(api_key="secret-api-key")
+
+
+def test_non_positive_effective_budget_raises() -> None:
+    counter = FakeTokenCounter()
+    diff = _make_diff(path="a.py", patch_text="hello")
+    # reserved alone exceeds the window
+    mgr = TokenBudgetManager(counter=counter, context_window=1000, reserved_output_tokens=2048)
+    with pytest.raises(ValueError, match="not positive"):
+        mgr.assess([diff])
+    # per-call overhead can also zero it out
+    mgr = TokenBudgetManager(counter=counter, context_window=2548)
+    with pytest.raises(ValueError, match="not positive"):
+        mgr.assess([diff])
+    with pytest.raises(ValueError, match="not positive"):
+        mgr.assess([])
+
+
+def test_low_signal_truncated_before_larger_normal() -> None:
+    normal = _make_diff(path="src/service.py", patch_text="n" * 300)
+    snap = _make_diff(path="tests/__snapshots__/app.snap", patch_text="s" * 150)
+    truncated_snap = _make_diff(
+        path="tests/__snapshots__/app.snap",
+        patch_text=f"[patch omitted for size: +{snap.additions}/-{snap.deletions} lines]",
+    )
+    tokens_with_snap_truncated = len(format_diff_for_counting([normal, truncated_snap]))
+    counter = FakeTokenCounter(char_rate=1)
+    mgr = TokenBudgetManager(
+        counter=counter, context_window=tokens_with_snap_truncated + 2048 + 500
+    )
+
+    decision = mgr.assess([normal, snap])
+
+    assert decision.strategy == BudgetStrategy.TRUNCATED
+    assert [d.path for d in decision.omitted_diffs] == ["tests/__snapshots__/app.snap"]
+    by_path = {d.path: d for d in decision.included_diffs}
+    assert by_path["src/service.py"].patch_text == "n" * 300
+
+
+def test_duplicate_paths_each_processed() -> None:
+    first = _make_diff(path="dup.py", patch_text="a" * 100)
+    second = _make_diff(path="dup.py", patch_text="b" * 100)
+    counter = FakeTokenCounter(char_rate=1)
+    mgr = TokenBudgetManager(counter=counter, context_window=2048 + 500 + 10)
+
+    decision = mgr.assess([first, second])
+
+    assert decision.strategy == BudgetStrategy.NEEDS_CHUNKING
+    assert len(decision.omitted_diffs) == 2
+    assert [d.patch_text for d in decision.included_diffs].count(
+        "[patch omitted for size: +10/-5 lines]"
+    ) == 2
+    # Originals keep their patches; working copies are independent objects.
+    assert (first.patch_text, second.patch_text) == ("a" * 100, "b" * 100)
+
+
+def test_chunking_path_makes_no_extra_count_call() -> None:
+    diffs = [
+        _make_diff(path="a.py", patch_text="a" * 100),
+        _make_diff(path="b.py", patch_text="b" * 100),
+    ]
+    counter = FakeTokenCounter(char_rate=1)
+    mgr = TokenBudgetManager(counter=counter, context_window=2048 + 500 + 10)
+
+    decision = mgr.assess(diffs)
+
+    assert decision.strategy == BudgetStrategy.NEEDS_CHUNKING
+    # 1 initial count + 1 per truncated file; the final total reuses the last one.
+    assert len(counter.calls) == 3

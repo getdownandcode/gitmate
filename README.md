@@ -21,7 +21,7 @@ uv sync --extra dev
 uv run pytest
 ```
 
-## Usage (Phases 0–1)
+## Usage (Phases 0–2)
 
 ```bash
 uv run gitmate --help
@@ -29,6 +29,9 @@ uv run gitmate config set-key   # stored in the OS credential store, never in a 
 uv run gitmate config show
 uv run gitmate config set model gemini-flash
 uv run gitmate config set ignore_globs '*.gen.py,*.tmp'  # comma-separated, empty clears
+uv run gitmate config set max_context_tokens 8000        # override model context limit
+uv run gitmate config set reserved_output_tokens 1500    # reserve headroom for model reply
+uv run gitmate config set template_overhead 600          # reserve headroom for prompt template
 uv run gitmate debug-diff             # staged diff: per-file table + cleaned patch
 uv run gitmate debug-diff --summary   # per-file stats table only, no patch text
 uv run gitmate debug-diff --base main # branch-vs-main diff (PR path)
@@ -45,6 +48,6 @@ files in the draw.io desktop app to edit):
 | Diagram | Source | Export |
 |---|---|---|
 | System architecture (Phases 0–8, gemini-3.5-flash-lite) | [`docs/architecture.drawio`](docs/architecture.drawio) | [`docs/architecture.png`](docs/architecture.png) |
-| Phase 0 class diagram (`config.py`, `cli.py`) | [`docs/class-diagram.drawio`](docs/class-diagram.drawio) | [`docs/class-diagram.png`](docs/class-diagram.png) |
+| Class diagram (Phases 0–2: config, diff extraction, token budgeting) | [`docs/class-diagram.drawio`](docs/class-diagram.drawio) | [`docs/class-diagram.png`](docs/class-diagram.png) |
 | Use cases (implemented + planned) | [`docs/use-case.drawio`](docs/use-case.drawio) | [`docs/use-case.png`](docs/use-case.png) |
 | `config` command sequences | [`docs/sequence.drawio`](docs/sequence.drawio) | [`docs/sequence.png`](docs/sequence.png) |

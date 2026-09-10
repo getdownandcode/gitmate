@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -123,38 +125,68 @@ def config_show() -> None:
     table.add_column("field")
     table.add_column("value")
     table.add_row("config file", str(config_mod.config_path()))
-    table.add_row("model", cfg.model)
-    table.add_row("commit_style", cfg.commit_style)
-    table.add_row(
-        "budget_cap_usd", str(cfg.budget_cap_usd) if cfg.budget_cap_usd is not None else "none"
-    )
-    table.add_row("ignore_globs", ", ".join(cfg.ignore_globs) if cfg.ignore_globs else "none")
+    for f in dataclasses.fields(cfg):
+        val = getattr(cfg, f.name)
+        if val is None:
+            display_val = "none"
+        elif isinstance(val, list):
+            display_val = ", ".join(val) if val else "none"
+        else:
+            display_val = str(val)
+        table.add_row(f.name, display_val)
     table.add_row("api_key", "set" if key_set else "not set")
     console.print(table)
 
 
 @config_app.command("set")
 def config_set(field: str, value: str) -> None:
-    """Set one field: model, commit_style, budget_cap_usd, ignore_globs."""
+    """Set any config field: model, commit_style, budget_cap_usd, ignore_globs, cache_dir, etc."""
     try:
         cfg = config_mod.load_config()
     except config_mod.ConfigError as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(1) from None
-    match field:
-        case "model":
-            cfg.model = value
-        case "commit_style":
-            cfg.commit_style = value
-        case "budget_cap_usd":
-            cfg.budget_cap_usd = None if value == "" else _parse_budget(value)
-        case "ignore_globs":
-            cfg.ignore_globs = [g.strip() for g in value.split(",") if g.strip()]
-        case _:
-            raise typer.BadParameter(
-                f"unknown field {field!r}; expected model, commit_style, "
-                "budget_cap_usd, or ignore_globs."
-            )
+
+    field_map = {f.name: f for f in dataclasses.fields(config_mod.GitmateConfig)}
+    if field not in field_map:
+        valid_fields = ", ".join(field_map.keys())
+        raise typer.BadParameter(f"unknown field {field!r}; expected one of: {valid_fields}.")
+
+    if field == "ignore_globs":
+        cfg.ignore_globs = [g.strip() for g in value.split(",") if g.strip()]
+    elif field == "budget_cap_usd":
+        cfg.budget_cap_usd = None if value in ("", "none") else _parse_budget(value)
+    elif field in ("max_context_tokens", "reserved_output_tokens", "template_overhead"):
+        if field == "max_context_tokens" and value in ("", "none"):
+            cfg.max_context_tokens = None
+        else:
+            try:
+                int_val = int(value)
+                if int_val <= 0:
+                    raise ValueError
+            except ValueError:
+                raise typer.BadParameter(f"'{field}' must be a positive integer.") from None
+            setattr(cfg, field, int_val)
+    elif field == "cache_dir":
+        cfg.cache_dir = None if value in ("", "none") else value.strip() or None
+    elif field in ("model", "commit_style"):
+        stripped = value.strip()
+        if not stripped:
+            raise typer.BadParameter(f"'{field}' must not be empty.")
+        setattr(cfg, field, stripped)
+    else:
+        setattr(cfg, field, value)
+
+    # Validate overall config integrity
+    max_ctx = cfg.max_context_tokens
+    reserved = cfg.reserved_output_tokens
+    overhead = cfg.template_overhead
+    if max_ctx is not None and max_ctx <= (reserved + overhead):
+        raise typer.BadParameter(
+            f"'max_context_tokens' ({max_ctx}) must be greater than "
+            f"'reserved_output_tokens' + 'template_overhead' ({reserved + overhead})."
+        )
+
     config_mod.save_config(cfg)
     console.print(f"[green]Set {field}.[/green]")
 

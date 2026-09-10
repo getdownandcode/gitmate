@@ -174,3 +174,44 @@ def test_debug_diff_git_command_error_clean_error(tmp_config_dir: Path, git_repo
     assert result.exit_code == 1
     assert "error:" in result.output
     assert "Traceback" not in result.output
+
+
+def test_config_set_and_show_all_dataclass_fields(
+    tmp_config_dir: Path, mem_store: InMemorySecretStore
+) -> None:
+    runner.invoke(cli.app, ["config", "set", "max_context_tokens", "16000"])
+    runner.invoke(cli.app, ["config", "set", "reserved_output_tokens", "1000"])
+    runner.invoke(cli.app, ["config", "set", "template_overhead", "400"])
+    runner.invoke(cli.app, ["config", "set", "cache_dir", "/custom/cache"])
+
+    cfg = load_config()
+    assert cfg.max_context_tokens == 16000
+    assert cfg.reserved_output_tokens == 1000
+    assert cfg.template_overhead == 400
+    assert cfg.cache_dir == "/custom/cache"
+
+    res = runner.invoke(cli.app, ["config", "show"])
+    assert res.exit_code == 0
+    assert "max_context_tokens" in res.output
+    assert "16000" in res.output
+    assert "cache_dir" in res.output
+    assert "/custom/cache" in res.output
+
+
+def test_config_set_budget_fields_validation(tmp_config_dir: Path) -> None:
+    res = runner.invoke(cli.app, ["config", "set", "max_context_tokens", "0"])
+    assert res.exit_code != 0
+    assert "positive integer" in res.output
+
+    res = runner.invoke(cli.app, ["config", "set", "max_context_tokens", "--", "-5"])
+    assert res.exit_code != 0
+    assert "positive integer" in res.output
+
+    res = runner.invoke(cli.app, ["config", "set", "reserved_output_tokens", "not-a-number"])
+    assert res.exit_code != 0
+    assert "positive integer" in res.output
+
+    # max_context_tokens <= reserved + overhead (default 2048 + 500 = 2548)
+    res = runner.invoke(cli.app, ["config", "set", "max_context_tokens", "2000"])
+    assert res.exit_code != 0
+    assert "must be greater than" in res.output

@@ -26,8 +26,6 @@ DEFAULT_COMMIT_STYLE = "conventional"
 #: Context window limits for known models; users override via `max_context_tokens`.
 DEFAULT_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "gemini-3.5-flash-lite": 1_048_576,
-    # Supported for user override via 'config set model', not our default:
-    "gemini-3.5-flash": 1_048_576,
     "gemini-3-flash": 1_048_576,
     "gemini-flash": 1_048_576,
     "claude-3-5-sonnet": 200_000,

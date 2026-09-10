@@ -87,6 +87,8 @@ def test_cache_dir_wrong_type_raises(tmp_config_dir: Path) -> None:
 
 
 def test_get_context_window_known_models() -> None:
+    assert get_context_window(GitmateConfig(model="gemini-3.5-flash-lite")) == 1_048_576
+    assert get_context_window(GitmateConfig(model="gemini-3.5-flash")) == 1_048_576
     assert get_context_window(GitmateConfig(model="gemini-flash")) == 1_048_576
     assert get_context_window(GitmateConfig(model="claude-3-5-sonnet")) == 200_000
 

@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from tenacity import wait_none
 
 from gitmate.providers.base import LLMProvider, LLMResponse, ProviderUnavailable
 from gitmate.providers.cache import CachedProvider, cache_key
 from gitmate.providers.gemini import GeminiProvider
+
+
+@pytest.fixture(autouse=True)
+def fast_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Eliminate tenacity exponential backoff delays during tests."""
+    retry_obj = GeminiProvider._generate_with_retry.retry  # type: ignore[attr-defined]
+    monkeypatch.setattr(retry_obj, "wait", wait_none())
 
 
 class FakeProvider:
@@ -82,14 +91,35 @@ def test_cache_dir_override(tmp_path: Path) -> None:
 # --- Gemini provider ---
 
 
-def _resp(text: str) -> MagicMock:
+def _resp(text: str | None, finish_reason: Any = None) -> MagicMock:
     r = MagicMock()
     r.text = text
     meta = MagicMock()
     meta.prompt_token_count = 10
     meta.candidates_token_count = 5
     r.usage_metadata = meta
+    if finish_reason is not None:
+        cand = MagicMock()
+        cand.finish_reason = finish_reason
+        r.candidates = [cand]
+    else:
+        r.candidates = []
     return r
+
+
+def test_cache_does_not_store_empty_response(tmp_path: Path) -> None:
+    provider = FakeProvider(text="")
+    cached = CachedProvider(provider, cache_dir=tmp_path)
+    resp1 = cached.generate("p", "m")
+    assert resp1.text == ""
+    assert len(provider.calls) == 1
+
+    # Empty response should not be cached; second call hits the provider again
+    provider.text = "now valid"
+    resp2 = cached.generate("p", "m")
+    assert resp2.text == "now valid"
+    assert len(provider.calls) == 2
+    cached.close()
 
 
 def test_gemini_provider_success() -> None:
@@ -104,6 +134,26 @@ def test_gemini_provider_success() -> None:
     client.models.generate_content.assert_called_once_with(
         model="gemini-3.5-flash-lite", contents="write a message"
     )
+
+
+def test_gemini_provider_empty_response_raises() -> None:
+    client = MagicMock()
+    client.models.generate_content.return_value = _resp(None)
+    provider = GeminiProvider(client=client)
+    with pytest.raises(ProviderUnavailable, match="Gemini returned an empty response"):
+        provider.generate("prompt", "gemini-3.5-flash-lite")
+
+
+def test_gemini_provider_safety_declined_raises_with_finish_reason() -> None:
+    client = MagicMock()
+    reason = MagicMock()
+    reason.name = "SAFETY"
+    client.models.generate_content.return_value = _resp("", finish_reason=reason)
+    provider = GeminiProvider(client=client)
+    with pytest.raises(
+        ProviderUnavailable, match=r"Gemini declined to respond \(finish_reason: SAFETY\)"
+    ):
+        provider.generate("prompt", "gemini-3.5-flash-lite")
 
 
 def test_gemini_provider_no_api_key_or_client() -> None:
@@ -146,6 +196,8 @@ def test_gemini_provider_non_transient_raises_without_retry() -> None:
     assert client.models.generate_content.call_count == 1
 
 
-def test_is_like_provider_protocol() -> None:
+def test_is_like_provider_protocol(tmp_path: Path) -> None:
     assert isinstance(GeminiProvider(), LLMProvider)
-    assert isinstance(CachedProvider(FakeProvider(), cache_dir=Path("/tmp/nope")), LLMProvider)
+    cached = CachedProvider(FakeProvider(), cache_dir=tmp_path)
+    assert isinstance(cached, LLMProvider)
+    cached.close()

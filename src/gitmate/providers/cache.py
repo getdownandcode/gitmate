@@ -54,7 +54,8 @@ class CachedProvider:
         if cached is not None:
             return cached
         response = self._provider.generate(prompt, model)
-        self._cache.set(key, response, expire=self._ttl)
+        if response.text.strip():
+            self._cache.set(key, response, expire=self._ttl)
         return response
 
     def close(self) -> None:

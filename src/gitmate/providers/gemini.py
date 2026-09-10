@@ -65,6 +65,17 @@ class GeminiProvider:
                 raise RetryableProviderError(str(exc)) from exc
             raise ProviderUnavailable(f"Gemini request failed: {exc}") from exc
         text = (resp.text or "").strip()
+        if not text:
+            finish_reason = None
+            candidates = getattr(resp, "candidates", None)
+            if candidates and len(candidates) > 0:
+                finish_reason = getattr(candidates[0], "finish_reason", None)
+            if finish_reason is not None:
+                reason_name = getattr(finish_reason, "name", str(finish_reason))
+                raise ProviderUnavailable(
+                    f"Gemini declined to respond (finish_reason: {reason_name})."
+                )
+            raise ProviderUnavailable("Gemini returned an empty response.")
         return LLMResponse(
             text=text,
             model=model,

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from gitmate.config import GitmateConfig, UnknownModelError
 from gitmate.diff_extractor import FileDiff
 from gitmate.token_budget import (
     BudgetDecision,
@@ -518,3 +519,24 @@ def test_mixed_truncated_and_guarded_diffs_trigger_needs_chunking() -> None:
     assert [d.path for d in decision.omitted_diffs] == ["big.py"]
     # Ratio format: 1 of 3 files truncated, NOT "even with all 1 files truncated"
     assert "even with 1/3 files truncated; requires chunking" in decision.summary_note
+
+
+def test_from_config_uses_model_context_window() -> None:
+    counter = FakeTokenCounter()
+    gemini = TokenBudgetManager.from_config(GitmateConfig(model="gemini-3.5-flash-lite"), counter)
+    assert gemini.context_window == 1_048_576
+    assert gemini.model == "gemini-3.5-flash-lite"
+
+    claude = TokenBudgetManager.from_config(GitmateConfig(model="claude-3-5-sonnet"), counter)
+    assert claude.context_window == 200_000
+
+
+def test_from_config_override_and_unknown_model() -> None:
+    counter = FakeTokenCounter()
+    overridden = TokenBudgetManager.from_config(
+        GitmateConfig(model="anything", max_context_tokens=32_000), counter
+    )
+    assert overridden.context_window == 32_000
+
+    with pytest.raises(UnknownModelError):
+        TokenBudgetManager.from_config(GitmateConfig(model="no-such-model"), counter)

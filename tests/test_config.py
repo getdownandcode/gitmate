@@ -74,6 +74,18 @@ def test_ignore_globs_wrong_type_raises(tmp_config_dir: Path) -> None:
         load_config()
 
 
+def test_cache_dir_round_trip(tmp_config_dir: Path) -> None:
+    save_config(GitmateConfig(cache_dir="/tmp/gitmate-cache"))
+    assert load_config().cache_dir == "/tmp/gitmate-cache"
+
+
+def test_cache_dir_wrong_type_raises(tmp_config_dir: Path) -> None:
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text('cache_dir = ""\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="'cache_dir' must be a non-empty string"):
+        load_config()
+
+
 def test_get_context_window_known_models() -> None:
     assert get_context_window(GitmateConfig(model="gemini-flash")) == 1_048_576
     assert get_context_window(GitmateConfig(model="claude-3-5-sonnet")) == 200_000

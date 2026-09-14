@@ -27,7 +27,7 @@ uv run pytest
 uv run gitmate --help
 uv run gitmate config set-key   # stored in the OS credential store, never in a file
 uv run gitmate config show
-uv run gitmate config set model gemini-flash
+uv run gitmate config set model gemini-3.5-flash-lite
 uv run gitmate config set ignore_globs '*.gen.py,*.tmp'  # comma-separated, empty clears
 uv run gitmate config set max_context_tokens 8000        # override model context limit
 uv run gitmate config set reserved_output_tokens 1500    # reserve headroom for model reply

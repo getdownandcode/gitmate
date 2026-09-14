@@ -10,6 +10,8 @@ from gitmate.config import (
     DEFAULT_MODEL,
     DEFAULT_RESERVED_OUTPUT_TOKENS,
     DEFAULT_TEMPLATE_OVERHEAD,
+    GitmateConfig,
+    get_context_window,
 )
 from gitmate.diff_extractor import FileDiff
 
@@ -165,6 +167,21 @@ class TokenBudgetManager:
             )
         self.reserved_output_tokens = reserved_output_tokens
         self.default_template_overhead = default_template_overhead
+
+    @classmethod
+    def from_config(cls, cfg: GitmateConfig, counter: TokenCounter) -> TokenBudgetManager:
+        """Build a manager whose context window comes from the configured model.
+
+        Replaces the constructor's 1M default so non-Gemini models (e.g. a
+        200k Claude window) are never silently over-budgeted.
+        """
+        return cls(
+            counter=counter,
+            model=cfg.model,
+            context_window=get_context_window(cfg),
+            reserved_output_tokens=cfg.reserved_output_tokens,
+            default_template_overhead=cfg.template_overhead,
+        )
 
     def count_diff_tokens(self, diffs: list[FileDiff]) -> int:
         """Calculate token count for a list of FileDiffs."""

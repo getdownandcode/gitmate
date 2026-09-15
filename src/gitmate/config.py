@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import keyring
+import keyring.errors
 import tomli_w
 
 APP_NAME = "gitmate"
@@ -22,6 +23,7 @@ CONFIG_ENV_VAR = "GITMATE_CONFIG_DIR"
 # still resolves.
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 DEFAULT_COMMIT_STYLE = "conventional"
+COMMIT_STYLES = ("conventional", "plain")
 
 #: Context window limits for known models; users override via `max_context_tokens`.
 DEFAULT_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
@@ -77,8 +79,11 @@ class KeyringSecretStore:
         keyring.set_password(SERVICE_NAME, account, secret)
 
     def get_secret(self, account: str) -> str | None:
-        """Return a secret from the OS store, or None when absent."""
-        return keyring.get_password(SERVICE_NAME, account)
+        """Return a secret from the OS store, or None when absent or unavailable."""
+        try:
+            return keyring.get_password(SERVICE_NAME, account)
+        except keyring.errors.KeyringError:
+            return None
 
 
 class InMemorySecretStore:
@@ -138,6 +143,9 @@ def load_config(path: Path | None = None) -> GitmateConfig:
     style = raw.get("commit_style", DEFAULT_COMMIT_STYLE)
     if not isinstance(style, str):
         raise ConfigError(f"cannot parse {resolved}: 'commit_style' must be a string")
+    if style not in COMMIT_STYLES:
+        valid_styles = ", ".join(COMMIT_STYLES)
+        raise ConfigError(f"cannot parse {resolved}: 'commit_style' must be one of: {valid_styles}")
     budget = raw.get("budget_cap_usd")
     if budget is None:
         cap: float | None = None

@@ -21,13 +21,14 @@ uv sync --extra dev
 uv run pytest
 ```
 
-## Usage (Phases 0–3)
+## Usage (Phases 0–4)
 
 ```bash
 uv run gitmate --help
 uv run gitmate config set-key   # stored in the OS credential store, never in a file
 uv run gitmate config show
 uv run gitmate config set model gemini-3.5-flash-lite
+uv run gitmate config set commit_style conventional      # or 'plain'
 uv run gitmate config set ignore_globs '*.gen.py,*.tmp'  # comma-separated, empty clears
 uv run gitmate config set max_context_tokens 8000        # override model context limit
 uv run gitmate config set reserved_output_tokens 1500    # reserve headroom for model reply
@@ -38,9 +39,11 @@ uv run gitmate debug-diff --summary   # per-file stats table only, no patch text
 uv run gitmate debug-diff --base main # branch-vs-main diff (PR path)
 ```
 
-Phase 3 introduces the `LLMProvider` abstraction, backed by `GeminiProvider`
-(targeting `gemini-3.5-flash-lite` with tenacity exponential backoff retries)
-and wrapped by `CachedProvider` (hash-keyed disk caching via `diskcache`).
+Phase 4 introduces versioned prompt templates (`src/gitmate/templates/`: `commit_conventional.txt`,
+`commit_plain.txt`, `pr_summary.txt`) and deterministic template-based fallback degradation
+(`fallback.py`). When the LLM backend is offline, rate-limited, unauthenticated, or fails retries,
+`generate_commit_message` warns the user (`⚠ API unavailable, using template fallback`) and
+derives a clean commit message directly from diff metadata without making an LLM call.
 `commit`, `pr-summary`, `changelog`, and `doc` remain stubbed until their phases
 land — see `AGENTS.md` and the phased roadmap for details.
 
@@ -52,6 +55,6 @@ files in the draw.io desktop app to edit):
 | Diagram | Source | Export |
 |---|---|---|
 | System architecture (Phases 0–8, gemini-3.5-flash-lite) | [`docs/architecture.drawio`](docs/architecture.drawio) | [`docs/architecture.png`](docs/architecture.png) |
-| Class diagram (Phases 0–3: config, diff extraction, token budgeting, providers & caching) | [`docs/class-diagram.drawio`](docs/class-diagram.drawio) | [`docs/class-diagram.png`](docs/class-diagram.png) |
+| Class diagram (Phases 0–4: config, diffs, budget, providers, templates & fallback) | [`docs/class-diagram.drawio`](docs/class-diagram.drawio) | [`docs/class-diagram.png`](docs/class-diagram.png) |
 | Use cases (implemented + planned) | [`docs/use-case.drawio`](docs/use-case.drawio) | [`docs/use-case.png`](docs/use-case.png) |
 | `config` command sequences | [`docs/sequence.drawio`](docs/sequence.drawio) | [`docs/sequence.png`](docs/sequence.png) |

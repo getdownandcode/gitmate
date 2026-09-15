@@ -173,6 +173,9 @@ def config_set(field: str, value: str) -> None:
         stripped = value.strip()
         if not stripped:
             raise typer.BadParameter(f"'{field}' must not be empty.")
+        if field == "commit_style" and stripped not in config_mod.COMMIT_STYLES:
+            valid_styles = ", ".join(config_mod.COMMIT_STYLES)
+            raise typer.BadParameter(f"'commit_style' must be one of: {valid_styles}.")
         setattr(cfg, field, stripped)
     else:
         setattr(cfg, field, value)

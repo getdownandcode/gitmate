@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 from rich.console import Console
 
-from gitmate.config import GitmateConfig
+from gitmate.config import GitmateConfig, InMemorySecretStore
 from gitmate.diff_extractor import FileDiff
 from gitmate.fallback import generate_commit_message
 from gitmate.providers.base import LLMResponse, ProviderUnavailable
@@ -158,3 +158,22 @@ def test_generate_commit_message_counter_failure_triggers_fallback() -> None:
     console.print.assert_called_once_with(
         "[yellow]⚠ API unavailable, using template fallback[/yellow]"
     )
+
+
+def test_generate_commit_message_custom_secret_store() -> None:
+    cfg = GitmateConfig(commit_style="conventional")
+    provider = FakeProvider(response="feat(auth): add login feature")
+    counter = FakeCounter()
+    store = InMemorySecretStore()
+    store.set_secret("api-key", "test-key-123")
+
+    result = generate_commit_message(
+        diffs=_sample_diff(),
+        cfg=cfg,
+        provider=provider,
+        counter=counter,
+        secret_store=store,
+    )
+
+    assert result.is_fallback is False
+    assert result.text == "feat(auth): add login feature"

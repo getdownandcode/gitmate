@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import keyring.errors
 import pytest
 
 from gitmate.config import (
+    SERVICE_NAME,
     ConfigError,
     GitmateConfig,
     InMemorySecretStore,
+    KeyringSecretStore,
     UnknownModelError,
     config_path,
     get_context_window,
@@ -60,6 +63,34 @@ def test_memory_store_round_trip() -> None:
     assert store.get_secret("api-key") is None
     store.set_secret("api-key", "s3cr3t")
     assert store.get_secret("api-key") == "s3cr3t"
+
+
+def test_keyring_store_get_secret_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("keyring.get_password", lambda service, account: "my-key")
+    store = KeyringSecretStore()
+    assert store.get_secret("api-key") == "my-key"
+
+
+def test_keyring_store_get_secret_returns_none_on_keyring_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise(*args: object, **kwargs: object) -> str:
+        raise keyring.errors.NoKeyringError("no backend")
+
+    monkeypatch.setattr("keyring.get_password", _raise)
+    store = KeyringSecretStore()
+    assert store.get_secret("api-key") is None
+
+
+def test_keyring_store_set_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        "keyring.set_password",
+        lambda s, a, p: calls.append((s, a, p)),
+    )
+    store = KeyringSecretStore()
+    store.set_secret("api-key", "secret-val")
+    assert calls == [(SERVICE_NAME, "api-key", "secret-val")]
 
 
 def test_ignore_globs_round_trip(tmp_config_dir: Path) -> None:

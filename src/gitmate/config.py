@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import keyring
+import keyring.errors
 import tomli_w
 
 APP_NAME = "gitmate"
@@ -77,8 +78,11 @@ class KeyringSecretStore:
         keyring.set_password(SERVICE_NAME, account, secret)
 
     def get_secret(self, account: str) -> str | None:
-        """Return a secret from the OS store, or None when absent."""
-        return keyring.get_password(SERVICE_NAME, account)
+        """Return a secret from the OS store, or None when absent or unavailable."""
+        try:
+            return keyring.get_password(SERVICE_NAME, account)
+        except keyring.errors.KeyringError:
+            return None
 
 
 class InMemorySecretStore:

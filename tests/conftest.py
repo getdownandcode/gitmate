@@ -21,9 +21,17 @@ def tmp_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture(autouse=True)
 def mem_store(monkeypatch: pytest.MonkeyPatch) -> InMemorySecretStore:
-    """Swap the CLI's secret store for an in-memory fake across all tests."""
+    """Swap the CLI's secret store for an in-memory fake across all tests; never touch OS Keychain."""
     store = InMemorySecretStore()
     monkeypatch.setattr(cli, "secret_store", store)
+    monkeypatch.setattr(
+        "keyring.get_password",
+        lambda service, account: store.get_secret(account),
+    )
+    monkeypatch.setattr(
+        "keyring.set_password",
+        lambda service, account, password: store.set_secret(account, password),
+    )
     return store
 
 

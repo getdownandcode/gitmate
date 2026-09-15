@@ -218,6 +218,7 @@ def generate_commit_message(
     provider: LLMProvider | None = None,
     counter: TokenCounter | None = None,
     console: Console | None = None,
+    secret_store: config_mod.SecretStore | None = None,
 ) -> GenerationResult:
     """Orchestrate commit message generation with graceful fallback on provider failure."""
     if not diffs:
@@ -227,8 +228,8 @@ def generate_commit_message(
             model=cfg.model,
         )
 
-    secret_store = config_mod.KeyringSecretStore()
-    api_key = secret_store.get_secret(API_KEY_ACCOUNT) or os.environ.get("GEMINI_API_KEY")
+    store = secret_store if secret_store is not None else config_mod.KeyringSecretStore()
+    api_key = store.get_secret(API_KEY_ACCOUNT) or os.environ.get("GEMINI_API_KEY")
 
     # 1. Budget evaluation with fallback on counter/budget failure
     active_counter = counter if counter is not None else GeminiTokenCounter(api_key=api_key)

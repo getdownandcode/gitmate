@@ -239,7 +239,9 @@ def generate_commit_message(
         decision = budget_mgr.assess(diffs)
         if decision.strategy is BudgetStrategy.NEEDS_CHUNKING:
             if console is not None:
-                console.print("[yellow]⚠ Diff exceeds token budget, using template fallback[/yellow]")
+                console.print(
+                    "[yellow]⚠ Diff exceeds token budget, using template fallback[/yellow]"
+                )
             return GenerationResult(
                 text=generate_fallback_message(diffs, style=cfg.commit_style),
                 is_fallback=True,

@@ -145,9 +145,7 @@ def load_config(path: Path | None = None) -> GitmateConfig:
         raise ConfigError(f"cannot parse {resolved}: 'commit_style' must be a string")
     if style not in COMMIT_STYLES:
         valid_styles = ", ".join(COMMIT_STYLES)
-        raise ConfigError(
-            f"cannot parse {resolved}: 'commit_style' must be one of: {valid_styles}"
-        )
+        raise ConfigError(f"cannot parse {resolved}: 'commit_style' must be one of: {valid_styles}")
     budget = raw.get("budget_cap_usd")
     if budget is None:
         cap: float | None = None

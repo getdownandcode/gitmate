@@ -16,15 +16,18 @@ SERVICE_NAME = "gitmate"
 API_KEY_ACCOUNT = "api-key"
 CONFIG_ENV_VAR = "GITMATE_CONFIG_DIR"
 
-# Opaque default; exact provider model IDs are verified in Phase 3.
-DEFAULT_MODEL = "gemini-flash"
+# Default model ID. This is the literal google-genai SDK identifier. Gemini
+# model IDs churn fast (2.0 Flash is retired; Flash-Lite previews deprecate
+# within months), so keep this configurable and re-check before assuming it
+# still resolves.
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 DEFAULT_COMMIT_STYLE = "conventional"
 
 #: Context window limits for known models; users override via `max_context_tokens`.
 DEFAULT_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
-    "gemini-flash": 1_048_576,
-    "gemini-3-flash": 1_048_576,
     "gemini-3.5-flash-lite": 1_048_576,
+    "gemini-3-flash": 1_048_576,
+    "gemini-flash": 1_048_576,
     "claude-3-5-sonnet": 200_000,
     "claude-3-5-haiku": 200_000,
 }
@@ -51,6 +54,7 @@ class GitmateConfig:
     max_context_tokens: int | None = None
     reserved_output_tokens: int = DEFAULT_RESERVED_OUTPUT_TOKENS
     template_overhead: int = DEFAULT_TEMPLATE_OVERHEAD
+    cache_dir: str | None = None
 
 
 class SecretStore(Protocol):
@@ -175,6 +179,14 @@ def load_config(path: Path | None = None) -> GitmateConfig:
             f"than 'reserved_output_tokens' + 'template_overhead' ({reserved + overhead})"
         )
 
+    cache_dir_raw = raw.get("cache_dir")
+    if cache_dir_raw is None:
+        cache_dir: str | None = None
+    elif not isinstance(cache_dir_raw, str) or not cache_dir_raw:
+        raise ConfigError(f"cannot parse {resolved}: 'cache_dir' must be a non-empty string")
+    else:
+        cache_dir = cache_dir_raw
+
     return GitmateConfig(
         model=model,
         commit_style=style,
@@ -183,6 +195,7 @@ def load_config(path: Path | None = None) -> GitmateConfig:
         max_context_tokens=max_ctx,
         reserved_output_tokens=reserved,
         template_overhead=overhead,
+        cache_dir=cache_dir,
     )
 
 
@@ -201,4 +214,6 @@ def save_config(cfg: GitmateConfig, path: Path | None = None) -> None:
         data["reserved_output_tokens"] = cfg.reserved_output_tokens
     if cfg.template_overhead != DEFAULT_TEMPLATE_OVERHEAD:
         data["template_overhead"] = cfg.template_overhead
+    if cfg.cache_dir is not None:
+        data["cache_dir"] = cfg.cache_dir
     resolved.write_text(tomli_w.dumps(data), encoding="utf-8")

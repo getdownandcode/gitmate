@@ -15,6 +15,7 @@ from gitmate.providers.base import LLMProvider, ProviderUnavailable
 from gitmate.providers.cache import CachedProvider
 from gitmate.providers.gemini import GeminiProvider
 from gitmate.token_budget import (
+    BudgetStrategy,
     GeminiTokenCounter,
     TokenBudgetError,
     TokenBudgetManager,
@@ -236,6 +237,15 @@ def generate_commit_message(
     try:
         budget_mgr = TokenBudgetManager.from_config(cfg, active_counter)
         decision = budget_mgr.assess(diffs)
+        if decision.strategy is BudgetStrategy.NEEDS_CHUNKING:
+            if console is not None:
+                console.print("[yellow]⚠ Diff exceeds token budget, using template fallback[/yellow]")
+            return GenerationResult(
+                text=generate_fallback_message(diffs, style=cfg.commit_style),
+                is_fallback=True,
+                model=cfg.model,
+                fallback_reason=decision.summary_note,
+            )
         patch_chunks = [d.patch_text for d in decision.included_diffs if d.patch_text]
         diff_text = "\n".join(patch_chunks)
         summary_note = decision.summary_note

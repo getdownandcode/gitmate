@@ -160,6 +160,30 @@ def test_generate_commit_message_counter_failure_triggers_fallback() -> None:
     )
 
 
+def test_generate_commit_message_chunking_uses_fallback() -> None:
+    cfg = GitmateConfig(max_context_tokens=2_600)
+    provider = FakeProvider()
+    counter = FakeCounter()
+    console = MagicMock(spec=Console)
+
+    result = generate_commit_message(
+        diffs=_sample_diff(),
+        cfg=cfg,
+        provider=provider,
+        counter=counter,
+        console=console,
+    )
+
+    assert result.is_fallback is True
+    assert result.text == "feat(auth): add login.py"
+    assert result.fallback_reason is not None
+    assert "requires chunking" in result.fallback_reason
+    assert provider.prompts == []
+    console.print.assert_called_once_with(
+        "[yellow]⚠ Diff exceeds token budget, using template fallback[/yellow]"
+    )
+
+
 def test_generate_commit_message_custom_secret_store() -> None:
     cfg = GitmateConfig(commit_style="conventional")
     provider = FakeProvider(response="feat(auth): add login feature")

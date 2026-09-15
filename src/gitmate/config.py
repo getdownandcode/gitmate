@@ -23,6 +23,7 @@ CONFIG_ENV_VAR = "GITMATE_CONFIG_DIR"
 # still resolves.
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 DEFAULT_COMMIT_STYLE = "conventional"
+COMMIT_STYLES = ("conventional", "plain")
 
 #: Context window limits for known models; users override via `max_context_tokens`.
 DEFAULT_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
@@ -142,6 +143,11 @@ def load_config(path: Path | None = None) -> GitmateConfig:
     style = raw.get("commit_style", DEFAULT_COMMIT_STYLE)
     if not isinstance(style, str):
         raise ConfigError(f"cannot parse {resolved}: 'commit_style' must be a string")
+    if style not in COMMIT_STYLES:
+        valid_styles = ", ".join(COMMIT_STYLES)
+        raise ConfigError(
+            f"cannot parse {resolved}: 'commit_style' must be one of: {valid_styles}"
+        )
     budget = raw.get("budget_cap_usd")
     if budget is None:
         cap: float | None = None

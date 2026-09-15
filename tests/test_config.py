@@ -58,6 +58,13 @@ def test_wrong_types_raise(tmp_config_dir: Path) -> None:
         load_config()
 
 
+def test_invalid_commit_style_raises(tmp_config_dir: Path) -> None:
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text('commit_style = "pr_summary"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="'commit_style' must be one of"):
+        load_config()
+
+
 def test_memory_store_round_trip() -> None:
     store = InMemorySecretStore()
     assert store.get_secret("api-key") is None

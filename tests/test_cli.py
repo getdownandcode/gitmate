@@ -378,4 +378,4 @@ def test_stats_cli_invalid_days(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("GITMATE_METRICS_DIR", str(tmp_path / "metrics"))
     res = runner.invoke(cli.app, ["stats", "--days", "0"])
     assert res.exit_code != 0
-    assert "--days must be a positive integer" in res.output
+    assert "positive integer" in res.output

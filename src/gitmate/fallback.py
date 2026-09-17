@@ -11,6 +11,7 @@ from gitmate import config as config_mod
 from gitmate.chunking import summarize_omitted_diffs
 from gitmate.config import API_KEY_ACCOUNT, GitmateConfig
 from gitmate.diff_extractor import FileDiff
+from gitmate.metrics import calculate_cost
 from gitmate.prompt import load_template, render_commit_prompt
 from gitmate.providers.base import LLMProvider, ProviderUnavailable
 from gitmate.providers.cache import CachedProvider, cache_key
@@ -54,6 +55,7 @@ class GenerationResult:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cache_hit: bool = False
+    estimated_cost_usd: float = 0.0
 
 
 def _extract_scope(path_str: str) -> str | None:
@@ -242,7 +244,7 @@ def generate_commit_message(
     active_provider: LLMProvider
     if provider is not None:
         if bypass_cache and isinstance(provider, CachedProvider):
-            active_provider = provider._provider
+            active_provider = provider.underlying
         else:
             active_provider = provider
     else:
@@ -327,6 +329,14 @@ def generate_commit_message(
         if resp.output_tokens is not None:
             total_output_tokens += resp.output_tokens
 
+        cost = calculate_cost(
+            model=resp.model,
+            tokens_in=total_input_tokens or None,
+            tokens_out=total_output_tokens or None,
+            cache_hit=cache_hit,
+            fallback_used=False,
+        )
+
         return GenerationResult(
             text=resp.text,
             is_fallback=False,
@@ -334,6 +344,7 @@ def generate_commit_message(
             input_tokens=total_input_tokens or None,
             output_tokens=total_output_tokens or None,
             cache_hit=cache_hit,
+            estimated_cost_usd=cost,
         )
 
     except ProviderUnavailable as exc:

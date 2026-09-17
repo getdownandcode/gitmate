@@ -293,3 +293,89 @@ def test_config_show_displays_allow_noninteractive_commit(tmp_config_dir: Path) 
     assert res.exit_code == 0
     assert "allow_noninteractive_commit" in res.output
     assert "False" in res.output
+
+
+def test_stats_cli_empty_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITMATE_METRICS_DIR", str(tmp_path / "empty_metrics"))
+    res = runner.invoke(cli.app, ["stats"])
+    assert res.exit_code == 0
+    assert "No invocations recorded yet" in res.output
+
+
+def test_stats_cli_populated_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from gitmate.metrics import record_invocation
+
+    m_dir = tmp_path / "cli_metrics"
+    monkeypatch.setenv("GITMATE_METRICS_DIR", str(m_dir))
+
+    record_invocation(
+        command="commit",
+        model="gemini-3.5-flash-lite",
+        tokens_in=5000,
+        tokens_out=500,
+        cache_hit=False,
+        latency_ms=450,
+        fallback_used=False,
+    )
+    record_invocation(
+        command="commit",
+        model="gemini-3.5-flash-lite",
+        tokens_in=5000,
+        tokens_out=500,
+        cache_hit=True,
+        latency_ms=12,
+        fallback_used=False,
+    )
+
+    # 1. Standard table
+    res = runner.invoke(cli.app, ["stats"])
+    assert res.exit_code == 0
+    assert "gitmate stats (All Time)" in res.output
+    assert "Total Invocations" in res.output
+    assert "Cache Hits" in res.output
+    assert "50.0%" in res.output
+    assert "Estimated Spend" in res.output
+    assert "By Command" in res.output
+
+    # 2. Time-scoped
+    res_month = runner.invoke(cli.app, ["stats", "--month"])
+    assert res_month.exit_code == 0
+    assert "gitmate stats (Current Month)" in res_month.output
+
+    res_days = runner.invoke(cli.app, ["stats", "--days", "7"])
+    assert res_days.exit_code == 0
+    assert "gitmate stats (Last 7 Days)" in res_days.output
+
+
+def test_stats_cli_raw_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    from gitmate.metrics import record_invocation
+
+    m_dir = tmp_path / "json_metrics"
+    monkeypatch.setenv("GITMATE_METRICS_DIR", str(m_dir))
+
+    record_invocation(
+        command="commit",
+        model="gemini-3.5-flash-lite",
+        tokens_in=1000,
+        tokens_out=100,
+        cache_hit=True,
+        latency_ms=15,
+        fallback_used=False,
+    )
+
+    res = runner.invoke(cli.app, ["stats", "--raw"])
+    assert res.exit_code == 0
+    data = json.loads(res.output)
+    assert data["total_invocations"] == 1
+    assert data["cache_hits"] == 1
+    assert data["cache_hit_rate"] == 100.0
+    assert "commit" in data["by_command"]
+
+
+def test_stats_cli_invalid_days(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITMATE_METRICS_DIR", str(tmp_path / "metrics"))
+    res = runner.invoke(cli.app, ["stats", "--days", "0"])
+    assert res.exit_code != 0
+    assert "--days must be a positive integer" in res.output

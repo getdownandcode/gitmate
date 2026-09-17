@@ -16,6 +16,18 @@ APP_NAME = "gitmate"
 DEFAULT_DB_FILENAME = "metrics.db"
 METRICS_DIR_ENV_VAR = "GITMATE_METRICS_DIR"
 
+#: Model pricing in USD per 1,000,000 tokens (input_rate, output_rate).
+MODEL_PRICING: dict[str, tuple[float, float]] = {
+    "gemini-3.5-flash-lite": (0.075, 0.30),
+    "gemini-flash-lite": (0.075, 0.30),
+    "gemini-3.5-flash": (0.15, 0.60),
+    "gemini-3-flash": (0.15, 0.60),
+    "gemini-flash": (0.15, 0.60),
+    "claude-3-5-haiku": (0.80, 4.00),
+    "claude-3-5-sonnet": (3.00, 15.00),
+}
+DEFAULT_PRICING: tuple[float, float] = (0.075, 0.30)
+
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS invocations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,7 +38,8 @@ CREATE TABLE IF NOT EXISTS invocations (
     tokens_out INTEGER,
     cache_hit INTEGER NOT NULL,
     latency_ms INTEGER,
-    fallback_used INTEGER NOT NULL
+    fallback_used INTEGER NOT NULL,
+    estimated_cost_usd REAL
 );
 CREATE INDEX IF NOT EXISTS idx_invocations_timestamp ON invocations(timestamp);
 CREATE INDEX IF NOT EXISTS idx_invocations_command ON invocations(command);
@@ -46,6 +59,63 @@ class InvocationRecord:
     cache_hit: bool
     latency_ms: int | None
     fallback_used: bool
+    estimated_cost_usd: float = 0.0
+
+
+@dataclass(frozen=True)
+class BreakdownStats:
+    """Aggregated metrics for a specific subset (e.g. command or model)."""
+
+    invocations: int
+    cache_hits: int
+    cache_hit_rate: float
+    tokens_in: int
+    tokens_out: int
+    total_tokens: int
+    cost_usd: float
+    avg_latency_ms: float
+
+
+@dataclass(frozen=True)
+class AggregateStats:
+    """Overall aggregated telemetry metrics and category breakdowns."""
+
+    total_invocations: int
+    cache_hits: int
+    cache_hit_rate: float
+    total_tokens_in: int
+    total_tokens_out: int
+    total_tokens: int
+    total_cost_usd: float
+    avg_latency_ms: float
+    avg_latency_hit_ms: float
+    avg_latency_miss_ms: float
+    fallback_count: int
+    by_command: dict[str, BreakdownStats]
+    by_model: dict[str, BreakdownStats]
+
+
+def calculate_cost(
+    model: str,
+    tokens_in: int | None,
+    tokens_out: int | None,
+    cache_hit: bool = False,
+    fallback_used: bool = False,
+) -> float:
+    """Calculate estimated cost in USD based on model pricing table.
+
+    Cache hits and template fallbacks consume zero billed API tokens ($0.00).
+    """
+    if cache_hit or fallback_used:
+        return 0.0
+    in_tokens = tokens_in or 0
+    out_tokens = tokens_out or 0
+    if in_tokens == 0 and out_tokens == 0:
+        return 0.0
+
+    in_rate, out_rate = MODEL_PRICING.get(model, DEFAULT_PRICING)
+    cost = (in_tokens / 1_000_000.0 * in_rate) + (out_tokens / 1_000_000.0 * out_rate)
+    return round(cost, 6)
 
 
 def get_metrics_db_path(db_path: Path | str | None = None) -> Path:
@@ -72,16 +142,23 @@ def get_metrics_db_path(db_path: Path | str | None = None) -> Path:
     return base / APP_NAME / DEFAULT_DB_FILENAME
 
 
-def init_db(db_path: Path | str | None = None) -> Path:
-    """Initialize the metrics database and invocations table if not present.
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """Ensure table exists and perform non-destructive schema migrations."""
+    conn.executescript(CREATE_TABLE_SQL)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(invocations)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "estimated_cost_usd" not in columns:
+        conn.execute("ALTER TABLE invocations ADD COLUMN estimated_cost_usd REAL")
 
-    Returns the resolved database path.
-    """
+
+def init_db(db_path: Path | str | None = None) -> Path:
+    """Initialize the metrics database and ensure schema is up-to-date."""
     target = get_metrics_db_path(db_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(target, timeout=5.0)
-    with contextlib.closing(conn):
-        conn.executescript(CREATE_TABLE_SQL)
+    with contextlib.closing(conn), conn:
+        _ensure_schema(conn)
     return target
 
 
@@ -93,6 +170,7 @@ def record_invocation(
     cache_hit: bool,
     latency_ms: int | None,
     fallback_used: bool,
+    estimated_cost_usd: float | None = None,
     db_path: Path | str | None = None,
     timestamp: str | None = None,
 ) -> None:
@@ -105,17 +183,28 @@ def record_invocation(
         target = get_metrics_db_path(db_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         ts = timestamp if timestamp is not None else datetime.now(UTC).isoformat()
+        cost = (
+            estimated_cost_usd
+            if estimated_cost_usd is not None
+            else calculate_cost(
+                model=model,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cache_hit=cache_hit,
+                fallback_used=fallback_used,
+            )
+        )
 
         conn = sqlite3.connect(target, timeout=5.0)
         with contextlib.closing(conn):
-            conn.executescript(CREATE_TABLE_SQL)
+            _ensure_schema(conn)
             with conn:
                 conn.execute(
                     """
                     INSERT INTO invocations (
                         timestamp, command, model, tokens_in, tokens_out,
-                        cache_hit, latency_ms, fallback_used
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        cache_hit, latency_ms, fallback_used, estimated_cost_usd
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ts,
@@ -126,6 +215,7 @@ def record_invocation(
                         1 if cache_hit else 0,
                         latency_ms,
                         1 if fallback_used else 0,
+                        cost,
                     ),
                 )
     except Exception as exc:  # noqa: BLE001
@@ -136,20 +226,20 @@ def get_invocations(
     db_path: Path | str | None = None,
     limit: int | None = None,
 ) -> list[InvocationRecord]:
-    """Retrieve recorded invocations from the metrics database.
-
-    Returns an empty list if the database file does not exist or errors occur.
-    """
+    """Retrieve recorded invocations from the metrics database."""
     try:
         target = get_metrics_db_path(db_path)
         if not target.exists():
             return []
         conn = sqlite3.connect(target, timeout=5.0)
         with contextlib.closing(conn):
+            _ensure_schema(conn)
             conn.row_factory = sqlite3.Row
             query = (
                 "SELECT id, timestamp, command, model, tokens_in, tokens_out, "
-                "cache_hit, latency_ms, fallback_used FROM invocations ORDER BY id ASC"
+                "cache_hit, latency_ms, fallback_used, "
+                "COALESCE(estimated_cost_usd, 0.0) as estimated_cost_usd "
+                "FROM invocations ORDER BY id ASC"
             )
             if limit is not None:
                 query += f" LIMIT {int(limit)}"
@@ -167,12 +257,149 @@ def get_invocations(
                     cache_hit=bool(row["cache_hit"]),
                     latency_ms=row["latency_ms"],
                     fallback_used=bool(row["fallback_used"]),
+                    estimated_cost_usd=float(row["estimated_cost_usd"]),
                 )
                 for row in rows
             ]
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to retrieve invocations from metrics DB: %s", exc)
         return []
+
+
+def get_monthly_spend(
+    year: int | None = None,
+    month: int | None = None,
+    db_path: Path | str | None = None,
+) -> float:
+    """Calculate total estimated spend in USD for a given calendar month.
+
+    Defaults to current UTC year and month if not specified.
+    """
+    now = datetime.now(UTC)
+    y = year if year is not None else now.year
+    m = month if month is not None else now.month
+    prefix = f"{y:04d}-{m:02d}%"
+
+    try:
+        target = get_metrics_db_path(db_path)
+        if not target.exists():
+            return 0.0
+        conn = sqlite3.connect(target, timeout=5.0)
+        with contextlib.closing(conn):
+            _ensure_schema(conn)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COALESCE(SUM(estimated_cost_usd), 0.0) FROM invocations WHERE timestamp LIKE ?",
+                (prefix,),
+            )
+            row = cursor.fetchone()
+            val = float(row[0]) if row and row[0] is not None else 0.0
+            return round(val, 6)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to calculate monthly spend: %s", exc)
+        return 0.0
+
+
+def _build_breakdown(records: list[InvocationRecord]) -> BreakdownStats:
+    """Build BreakdownStats from a list of InvocationRecords."""
+    total = len(records)
+    hits = sum(1 for r in records if r.cache_hit)
+    hit_rate = (hits / total * 100.0) if total > 0 else 0.0
+    t_in = sum(r.tokens_in or 0 for r in records)
+    t_out = sum(r.tokens_out or 0 for r in records)
+    cost = sum(r.estimated_cost_usd for r in records)
+    valid_latencies = [r.latency_ms for r in records if r.latency_ms is not None]
+    avg_lat = sum(valid_latencies) / len(valid_latencies) if valid_latencies else 0.0
+
+    return BreakdownStats(
+        invocations=total,
+        cache_hits=hits,
+        cache_hit_rate=round(hit_rate, 1),
+        tokens_in=t_in,
+        tokens_out=t_out,
+        total_tokens=t_in + t_out,
+        cost_usd=round(cost, 6),
+        avg_latency_ms=round(avg_lat, 1),
+    )
+
+
+def get_aggregate_stats(
+    since: datetime | None = None,
+    command: str | None = None,
+    db_path: Path | str | None = None,
+) -> AggregateStats:
+    """Compute aggregated metrics and breakdowns across invocations."""
+    records = get_invocations(db_path=db_path)
+
+    if since is not None:
+        since_iso = since.isoformat()
+        records = [r for r in records if r.timestamp >= since_iso]
+
+    if command is not None:
+        records = [r for r in records if r.command == command]
+
+    if not records:
+        return AggregateStats(
+            total_invocations=0,
+            cache_hits=0,
+            cache_hit_rate=0.0,
+            total_tokens_in=0,
+            total_tokens_out=0,
+            total_tokens=0,
+            total_cost_usd=0.0,
+            avg_latency_ms=0.0,
+            avg_latency_hit_ms=0.0,
+            avg_latency_miss_ms=0.0,
+            fallback_count=0,
+            by_command={},
+            by_model={},
+        )
+
+    total_invocations = len(records)
+    cache_hits = sum(1 for r in records if r.cache_hit)
+    cache_hit_rate = round(cache_hits / total_invocations * 100.0, 1)
+    total_tokens_in = sum(r.tokens_in or 0 for r in records)
+    total_tokens_out = sum(r.tokens_out or 0 for r in records)
+    total_tokens = total_tokens_in + total_tokens_out
+    total_cost = round(sum(r.estimated_cost_usd for r in records), 6)
+    fallback_count = sum(1 for r in records if r.fallback_used)
+
+    valid_latencies = [r.latency_ms for r in records if r.latency_ms is not None]
+    avg_latency = round(sum(valid_latencies) / len(valid_latencies), 1) if valid_latencies else 0.0
+
+    hit_latencies = [r.latency_ms for r in records if r.cache_hit and r.latency_ms is not None]
+    avg_hit_lat = round(sum(hit_latencies) / len(hit_latencies), 1) if hit_latencies else 0.0
+
+    miss_latencies = [r.latency_ms for r in records if not r.cache_hit and r.latency_ms is not None]
+    avg_miss_lat = round(sum(miss_latencies) / len(miss_latencies), 1) if miss_latencies else 0.0
+
+    # Group by command
+    by_command: dict[str, list[InvocationRecord]] = {}
+    for r in records:
+        by_command.setdefault(r.command, []).append(r)
+    cmd_breakdown = {cmd: _build_breakdown(recs) for cmd, recs in by_command.items()}
+
+    # Group by model
+    by_model: dict[str, list[InvocationRecord]] = {}
+    for r in records:
+        by_model.setdefault(r.model, []).append(r)
+    model_breakdown = {m: _build_breakdown(recs) for m, recs in by_model.items()}
+
+    return AggregateStats(
+        total_invocations=total_invocations,
+        cache_hits=cache_hits,
+        cache_hit_rate=cache_hit_rate,
+        total_tokens_in=total_tokens_in,
+        total_tokens_out=total_tokens_out,
+        total_tokens=total_tokens,
+        total_cost_usd=total_cost,
+        avg_latency_ms=avg_latency,
+        avg_latency_hit_ms=avg_hit_lat,
+        avg_latency_miss_ms=avg_miss_lat,
+        fallback_count=fallback_count,
+        by_command=cmd_breakdown,
+        by_model=model_breakdown,
+    )
 
 
 def clear_metrics(db_path: Path | str | None = None) -> None:

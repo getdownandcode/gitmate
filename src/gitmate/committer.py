@@ -19,7 +19,7 @@ from gitmate import config as config_mod
 from gitmate.config import GitmateConfig
 from gitmate.diff_extractor import DiffExtractor, GitCommandError
 from gitmate.fallback import generate_commit_message
-from gitmate.metrics import record_invocation
+from gitmate.metrics import get_monthly_spend, record_invocation
 from gitmate.providers.base import LLMProvider
 from gitmate.token_budget import TokenCounter
 
@@ -39,6 +39,7 @@ def _safe_record_telemetry(
     cache_hit: bool,
     latency_ms: int | None,
     fallback_used: bool,
+    estimated_cost_usd: float | None = None,
 ) -> None:
     """Record invocation to metrics database without propagating errors."""
     try:
@@ -50,6 +51,7 @@ def _safe_record_telemetry(
             cache_hit=cache_hit,
             latency_ms=latency_ms,
             fallback_used=fallback_used,
+            estimated_cost_usd=estimated_cost_usd,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to record telemetry: %s", exc)
@@ -232,6 +234,23 @@ def commit_flow(
         )
         return 1
 
+    # 3. Monthly budget cap enforcement
+    if active_cfg.budget_cap_usd is not None:
+        monthly_spend = get_monthly_spend()
+        if monthly_spend >= active_cfg.budget_cap_usd:
+            con.print(
+                f"[red]error:[/red] Monthly budget cap exceeded "
+                f"(${monthly_spend:.2f} >= ${active_cfg.budget_cap_usd:.2f}). "
+                "Aborting to prevent further LLM spend.\n"
+                "To adjust or remove the cap, run: gitmate config set budget_cap_usd <new_limit_or_none>"
+            )
+            return 1
+        if monthly_spend >= 0.8 * active_cfg.budget_cap_usd:
+            con.print(
+                f"[yellow]warning: Monthly spend has reached {int(monthly_spend / active_cfg.budget_cap_usd * 100)}% "
+                f"of budget cap (${monthly_spend:.2f} / ${active_cfg.budget_cap_usd:.2f}).[/yellow]"
+            )
+
     active_counter = counter
     if active_counter is None and provider is not None:
 
@@ -241,7 +260,7 @@ def commit_flow(
 
         active_counter = _SimpleCounter()
 
-    # 3. Initial generation & telemetry recording
+    # 4. Initial generation & telemetry recording
     t0 = time.perf_counter()
     gen_result = generate_commit_message(
         diffs=staged_diffs,
@@ -262,18 +281,19 @@ def commit_flow(
         cache_hit=gen_result.cache_hit,
         latency_ms=latency_ms,
         fallback_used=gen_result.is_fallback,
+        estimated_cost_usd=gen_result.estimated_cost_usd,
     )
 
     current_message = gen_result.text
     current_model = gen_result.model
     current_is_fallback = gen_result.is_fallback
 
-    # 4. Fast path: --yes with allow_noninteractive_commit enabled
+    # 5. Fast path: --yes with allow_noninteractive_commit enabled
     if yes:
         code = _execute_commit(current_message, console=con, cwd=repo_dir)
         return code
 
-    # 5. Interactive review loop
+    # 6. Interactive review loop
     _render_panel(con, current_message, current_model, current_is_fallback)
 
     while True:
@@ -305,6 +325,22 @@ def commit_flow(
                 _render_panel(con, current_message, current_model, current_is_fallback)
 
         elif choice in ("r", "regenerate"):
+            if active_cfg.budget_cap_usd is not None:
+                monthly_spend = get_monthly_spend()
+                if monthly_spend >= active_cfg.budget_cap_usd:
+                    con.print(
+                        f"[red]error:[/red] Monthly budget cap exceeded "
+                        f"(${monthly_spend:.2f} >= ${active_cfg.budget_cap_usd:.2f}). "
+                        "Aborting to prevent further LLM spend.\n"
+                        "To adjust or remove the cap, run: gitmate config set budget_cap_usd <new_limit_or_none>"
+                    )
+                    continue
+                if monthly_spend >= 0.8 * active_cfg.budget_cap_usd:
+                    con.print(
+                        f"[yellow]warning: Monthly spend has reached {int(monthly_spend / active_cfg.budget_cap_usd * 100)}% "
+                        f"of budget cap (${monthly_spend:.2f} / ${active_cfg.budget_cap_usd:.2f}).[/yellow]"
+                    )
+
             con.print("Regenerating commit message with fresh API call...")
             t0 = time.perf_counter()
             gen_result = generate_commit_message(
@@ -326,6 +362,7 @@ def commit_flow(
                 cache_hit=False,
                 latency_ms=latency_ms,
                 fallback_used=gen_result.is_fallback,
+                estimated_cost_usd=gen_result.estimated_cost_usd,
             )
 
             current_message = gen_result.text

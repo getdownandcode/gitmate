@@ -501,3 +501,75 @@ def test_commit_flow_git_commit_failure_returns_nonzero(
 
     code = commit_flow(console=con, provider=FakeProvider("msg"))
     assert code == 1
+
+
+# --- 10. Budget Cap Enforcement ---
+
+
+def test_commit_flow_budget_cap_exceeded_aborts_immediately(
+    git_repo: Path, metrics_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime
+
+    from gitmate.metrics import record_invocation
+
+    stage_file(git_repo, "budget.py", b"b = 1\n")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+
+    # Record previous spend in current month exceeding cap
+    now_iso = datetime.now(UTC).isoformat()
+    record_invocation(
+        command="commit",
+        model="gemini-3.5-flash-lite",
+        tokens_in=1000,
+        tokens_out=200,
+        cache_hit=False,
+        latency_ms=200,
+        fallback_used=False,
+        estimated_cost_usd=1.50,
+        timestamp=now_iso,
+    )
+
+    cfg = GitmateConfig(budget_cap_usd=1.00)
+    provider = FakeProvider("feat: should not generate")
+    con = Console()
+
+    code = commit_flow(cfg=cfg, console=con, provider=provider)
+    assert code == 1
+    assert provider.call_count == 0  # Provider never called
+
+
+def test_commit_flow_budget_cap_warning_allows_commit(
+    git_repo: Path, metrics_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime
+
+    from gitmate.metrics import record_invocation
+
+    stage_file(git_repo, "warn.py", b"w = 1\n")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+
+    # Record spend at 85% of $1.00 cap
+    now_iso = datetime.now(UTC).isoformat()
+    record_invocation(
+        command="commit",
+        model="gemini-3.5-flash-lite",
+        tokens_in=1000,
+        tokens_out=200,
+        cache_hit=False,
+        latency_ms=200,
+        fallback_used=False,
+        estimated_cost_usd=0.85,
+        timestamp=now_iso,
+    )
+
+    cfg = GitmateConfig(budget_cap_usd=1.00)
+    provider = FakeProvider("feat: allowed commit")
+    con = Console()
+    monkeypatch.setattr(con, "input", lambda prompt="": "a")
+
+    code = commit_flow(cfg=cfg, console=con, provider=provider)
+    assert code == 0
+    assert provider.call_count == 1
+    messages = _get_git_log_messages(git_repo)
+    assert messages[0] == "feat: allowed commit"

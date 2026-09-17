@@ -63,6 +63,7 @@ class GitmateConfig:
     reserved_output_tokens: int = DEFAULT_RESERVED_OUTPUT_TOKENS
     template_overhead: int = DEFAULT_TEMPLATE_OVERHEAD
     cache_dir: str | None = None
+    allow_noninteractive_commit: bool = False
 
 
 class SecretStore(Protocol):
@@ -201,6 +202,13 @@ def load_config(path: Path | None = None) -> GitmateConfig:
     else:
         cache_dir = cache_dir_raw
 
+    allow_noninteractive_raw = raw.get("allow_noninteractive_commit", False)
+    if not isinstance(allow_noninteractive_raw, bool):
+        raise ConfigError(
+            f"cannot parse {resolved}: 'allow_noninteractive_commit' must be a boolean"
+        )
+    allow_noninteractive = allow_noninteractive_raw
+
     return GitmateConfig(
         model=model,
         commit_style=style,
@@ -210,6 +218,7 @@ def load_config(path: Path | None = None) -> GitmateConfig:
         reserved_output_tokens=reserved,
         template_overhead=overhead,
         cache_dir=cache_dir,
+        allow_noninteractive_commit=allow_noninteractive,
     )
 
 
@@ -230,4 +239,6 @@ def save_config(cfg: GitmateConfig, path: Path | None = None) -> None:
         data["template_overhead"] = cfg.template_overhead
     if cfg.cache_dir is not None:
         data["cache_dir"] = cfg.cache_dir
+    if cfg.allow_noninteractive_commit:
+        data["allow_noninteractive_commit"] = cfg.allow_noninteractive_commit
     resolved.write_text(tomli_w.dumps(data), encoding="utf-8")

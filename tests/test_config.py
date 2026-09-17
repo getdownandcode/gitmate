@@ -200,3 +200,37 @@ def test_max_context_tokens_must_exceed_reserved_plus_overhead(tmp_config_dir: P
 def test_gemini_flash_non_lite_context_window() -> None:
     cfg = GitmateConfig(model="gemini-3.5-flash")
     assert get_context_window(cfg) == 1_048_576
+
+
+def test_allow_noninteractive_commit_default_false(tmp_config_dir: Path) -> None:
+    assert GitmateConfig().allow_noninteractive_commit is False
+    assert load_config().allow_noninteractive_commit is False
+
+
+def test_allow_noninteractive_commit_save_load_round_trip(tmp_config_dir: Path) -> None:
+    cfg = GitmateConfig(allow_noninteractive_commit=True)
+    save_config(cfg)
+
+    content = config_path().read_text(encoding="utf-8")
+    assert "allow_noninteractive_commit = true" in content
+
+    loaded = load_config()
+    assert loaded.allow_noninteractive_commit is True
+
+
+def test_allow_noninteractive_commit_omitted_when_false(tmp_config_dir: Path) -> None:
+    cfg = GitmateConfig(allow_noninteractive_commit=False)
+    save_config(cfg)
+
+    content = config_path().read_text(encoding="utf-8")
+    assert "allow_noninteractive_commit" not in content
+
+
+@pytest.mark.parametrize("bad_val", ['"true"', '"false"', "1", "0", "1.5", "[true]"])
+def test_allow_noninteractive_commit_invalid_types_raise(
+    tmp_config_dir: Path, bad_val: str
+) -> None:
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(f"allow_noninteractive_commit = {bad_val}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="'allow_noninteractive_commit' must be a boolean"):
+        load_config()

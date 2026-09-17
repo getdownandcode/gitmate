@@ -13,7 +13,7 @@ from gitmate.config import API_KEY_ACCOUNT, GitmateConfig
 from gitmate.diff_extractor import FileDiff
 from gitmate.prompt import load_template, render_commit_prompt
 from gitmate.providers.base import LLMProvider, ProviderUnavailable
-from gitmate.providers.cache import CachedProvider
+from gitmate.providers.cache import CachedProvider, cache_key
 from gitmate.providers.gemini import GeminiProvider
 from gitmate.token_budget import (
     BudgetStrategy,
@@ -53,6 +53,7 @@ class GenerationResult:
     fallback_reason: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    cache_hit: bool = False
 
 
 def _extract_scope(path_str: str) -> str | None:
@@ -221,6 +222,7 @@ def generate_commit_message(
     counter: TokenCounter | None = None,
     console: Console | None = None,
     secret_store: config_mod.SecretStore | None = None,
+    bypass_cache: bool = False,
 ) -> GenerationResult:
     """Orchestrate commit message generation with graceful fallback on provider failure."""
     if not diffs:
@@ -239,14 +241,20 @@ def generate_commit_message(
 
     active_provider: LLMProvider
     if provider is not None:
-        active_provider = provider
+        if bypass_cache and isinstance(provider, CachedProvider):
+            active_provider = provider._provider
+        else:
+            active_provider = provider
     else:
         base_provider = GeminiProvider(api_key=api_key)
-        active_provider = CachedProvider(
-            provider=base_provider,
-            cache_dir=cfg.cache_dir,
-            template_version=version_key,
-        )
+        if bypass_cache:
+            active_provider = base_provider
+        else:
+            active_provider = CachedProvider(
+                provider=base_provider,
+                cache_dir=cfg.cache_dir,
+                template_version=version_key,
+            )
 
     # 1. Budget evaluation with fallback on counter/budget failure
     active_counter = counter if counter is not None else GeminiTokenCounter(api_key=api_key)
@@ -308,6 +316,11 @@ def generate_commit_message(
             summary_note=summary_note,
         )
 
+        cache_hit = False
+        if not bypass_cache and isinstance(active_provider, CachedProvider):
+            key = cache_key(prompt_text, cfg.model, active_provider._template_version)
+            cache_hit = active_provider._cache.get(key, default=None) is not None
+
         resp = active_provider.generate(prompt=prompt_text, model=cfg.model)
         if resp.input_tokens is not None:
             total_input_tokens += resp.input_tokens
@@ -320,6 +333,7 @@ def generate_commit_message(
             model=resp.model,
             input_tokens=total_input_tokens or None,
             output_tokens=total_output_tokens or None,
+            cache_hit=cache_hit,
         )
 
     except ProviderUnavailable as exc:

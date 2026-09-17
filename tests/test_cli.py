@@ -28,7 +28,7 @@ def test_help_lists_all_commands() -> None:
 
 
 def test_stubs_report_not_implemented() -> None:
-    for name in ("commit", "pr-summary", "changelog", "doc"):
+    for name in ("pr-summary", "changelog", "doc"):
         result = runner.invoke(cli.app, [name])
         assert result.exit_code == 0
         assert "not implemented" in result.output
@@ -215,3 +215,81 @@ def test_config_set_budget_fields_validation(tmp_config_dir: Path) -> None:
     res = runner.invoke(cli.app, ["config", "set", "max_context_tokens", "2000"])
     assert res.exit_code != 0
     assert "must be greater than" in res.output
+
+
+def test_commit_cli_no_staged_diff_exits_zero(git_repo: Path, tmp_config_dir: Path) -> None:
+    result = runner.invoke(cli.app, ["commit"])
+    assert result.exit_code == 0
+    assert "No staged changes" in result.output
+
+
+def test_commit_cli_non_tty_without_yes_exits_one(git_repo: Path, tmp_config_dir: Path) -> None:
+    from conftest import stage_file
+
+    stage_file(git_repo, "a.py", b"x = 1\n")
+    result = runner.invoke(cli.app, ["commit"])
+    assert result.exit_code == 1
+    assert "Interactive review requires a TTY terminal" in result.output
+
+
+def test_commit_cli_yes_disabled_by_default(git_repo: Path, tmp_config_dir: Path) -> None:
+    from conftest import stage_file
+
+    stage_file(git_repo, "a.py", b"x = 1\n")
+    result = runner.invoke(cli.app, ["commit", "--yes"])
+    assert result.exit_code == 1
+    assert "Non-interactive commit (--yes) is disabled by default" in result.output
+
+
+def test_commit_cli_yes_enabled_in_config(
+    git_repo: Path, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from conftest import stage_file
+
+    import gitmate.committer as committer_mod
+    from gitmate.fallback import GenerationResult
+
+    stage_file(git_repo, "a.py", b"x = 1\n")
+    save_config(GitmateConfig(allow_noninteractive_commit=True))
+
+    monkeypatch.setattr(
+        committer_mod,
+        "generate_commit_message",
+        lambda *args, **kwargs: GenerationResult(
+            text="feat: non-interactive cli commit",
+            is_fallback=False,
+            model="gemini-3.5-flash-lite",
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["commit", "--yes"])
+    assert result.exit_code == 0
+
+
+def test_config_set_allow_noninteractive_commit(tmp_config_dir: Path) -> None:
+    # Set True
+    res = runner.invoke(cli.app, ["config", "set", "allow_noninteractive_commit", "true"])
+    assert res.exit_code == 0
+    assert load_config().allow_noninteractive_commit is True
+
+    # Set False
+    res = runner.invoke(cli.app, ["config", "set", "allow_noninteractive_commit", "false"])
+    assert res.exit_code == 0
+    assert load_config().allow_noninteractive_commit is False
+
+    # Case insensitive
+    res = runner.invoke(cli.app, ["config", "set", "allow_noninteractive_commit", "TRUE"])
+    assert res.exit_code == 0
+    assert load_config().allow_noninteractive_commit is True
+
+    # Invalid value
+    res = runner.invoke(cli.app, ["config", "set", "allow_noninteractive_commit", "invalid"])
+    assert res.exit_code != 0
+    assert "must be 'true' or 'false'" in res.output
+
+
+def test_config_show_displays_allow_noninteractive_commit(tmp_config_dir: Path) -> None:
+    res = runner.invoke(cli.app, ["config", "show"])
+    assert res.exit_code == 0
+    assert "allow_noninteractive_commit" in res.output
+    assert "False" in res.output

@@ -29,9 +29,15 @@ def _stub(name: str, milestone: str) -> None:
 
 
 @app.command()
-def commit() -> None:
-    """Generate a commit message for the staged diff."""
-    _stub("commit", "coming in Phase 5")
+def commit(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Commit without interactive confirmation."),
+) -> None:
+    """Generate a commit message for the staged diff and review before committing."""
+    from gitmate.committer import commit_flow
+
+    code = commit_flow(yes=yes, console=console, secret_store=secret_store)
+    if code != 0:
+        raise typer.Exit(code)
 
 
 @app.command()
@@ -169,6 +175,14 @@ def config_set(field: str, value: str) -> None:
             setattr(cfg, field, int_val)
     elif field == "cache_dir":
         cfg.cache_dir = None if value in ("", "none") else value.strip() or None
+    elif field == "allow_noninteractive_commit":
+        val_clean = value.strip().lower()
+        if val_clean == "true":
+            cfg.allow_noninteractive_commit = True
+        elif val_clean == "false":
+            cfg.allow_noninteractive_commit = False
+        else:
+            raise typer.BadParameter(f"'{field}' must be 'true' or 'false'.")
     elif field in ("model", "commit_style"):
         stripped = value.strip()
         if not stripped:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 from rich.console import Console
 
 from gitmate.config import GitmateConfig, InMemorySecretStore
@@ -160,8 +161,82 @@ def test_generate_commit_message_counter_failure_triggers_fallback() -> None:
     )
 
 
-def test_generate_commit_message_chunking_uses_fallback() -> None:
+def test_generate_commit_message_chunk_and_summarize_success() -> None:
+    """When diff forces NEEDS_CHUNKING, chunk omitted diffs, summarize, and merge into final prompt."""
     cfg = GitmateConfig(max_context_tokens=2_600)
+    provider = FakeProvider(response="feat(auth): add login service with chunking")
+    counter = FakeCounter()
+
+    result = generate_commit_message(
+        diffs=_sample_diff(),
+        cfg=cfg,
+        provider=provider,
+        counter=counter,
+    )
+
+    assert result.is_fallback is False
+    assert result.text == "feat(auth): add login service with chunking"
+    assert result.model == "gemini-3.5-flash-lite"
+    # 1 chunk call for src/auth/login.py + 1 final commit prompt call = 2 provider calls
+    assert len(provider.prompts) == 2
+
+    # First call was chunk summarization
+    assert "Summarize the following git diff for src/auth/login.py" in provider.prompts[0]
+    assert "+class LoginService:" in provider.prompts[0]
+
+    # Second call was final commit prompt containing merged chunk summary
+    assert "Summaries of large omitted files:" in provider.prompts[1]
+    assert "- src/auth/login.py: feat(auth): add login service" in provider.prompts[1]
+
+    # Accumulated token usage
+    assert result.input_tokens == 300  # 150 + 150
+    assert result.output_tokens == 50  # 25 + 25
+
+
+def test_generate_commit_message_chunking_provider_failure_triggers_fallback() -> None:
+    """If provider fails during chunk summarization, graceful degradation catches it."""
+    cfg = GitmateConfig(max_context_tokens=2_600)
+    provider = FailingProvider(error_msg="Rate limit exceeded during chunking")
+    counter = FakeCounter()
+    console = MagicMock(spec=Console)
+
+    result = generate_commit_message(
+        diffs=_sample_diff(),
+        cfg=cfg,
+        provider=provider,
+        counter=counter,
+        console=console,
+    )
+
+    assert result.is_fallback is True
+    assert result.text == "feat(auth): add login.py"
+    assert "Rate limit exceeded during chunking" in (result.fallback_reason or "")
+    console.print.assert_called_once_with(
+        "[yellow]⚠ API unavailable, using template fallback[/yellow]"
+    )
+
+
+def test_generate_commit_message_chunking_empty_omitted_diffs_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When NEEDS_CHUNKING has no omitted diffs, fall back cleanly."""
+    from gitmate.token_budget import BudgetDecision, BudgetStrategy, TokenBudgetManager
+
+    def _mock_assess(self: TokenBudgetManager, diffs: list[FileDiff]) -> BudgetDecision:
+        return BudgetDecision(
+            strategy=BudgetStrategy.NEEDS_CHUNKING,
+            included_diffs=diffs,
+            omitted_diffs=[],
+            total_tokens=999_999,
+            budget_limit=100,
+            reserved_output_tokens=2048,
+            template_overhead=500,
+            model="gemini-3.5-flash-lite",
+            summary_note="metadata exceeded budget",
+        )
+
+    monkeypatch.setattr(TokenBudgetManager, "assess", _mock_assess)
+    cfg = GitmateConfig()
     provider = FakeProvider()
     counter = FakeCounter()
     console = MagicMock(spec=Console)
@@ -176,8 +251,7 @@ def test_generate_commit_message_chunking_uses_fallback() -> None:
 
     assert result.is_fallback is True
     assert result.text == "feat(auth): add login.py"
-    assert result.fallback_reason is not None
-    assert "requires chunking" in result.fallback_reason
+    assert result.fallback_reason == "metadata exceeded budget"
     assert provider.prompts == []
     console.print.assert_called_once_with(
         "[yellow]⚠ Diff exceeds token budget, using template fallback[/yellow]"

@@ -28,12 +28,18 @@ COMMIT_STYLES = ("conventional", "plain")
 #: Context window limits for known models; users override via `max_context_tokens`.
 DEFAULT_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "gemini-3.5-flash-lite": 1_048_576,
+    # Standard Flash tier registered for completeness; gemini-3.5-flash-lite remains
+    # the configured default above.
+    "gemini-3.5-flash": 1_048_576,
     "gemini-3-flash": 1_048_576,
     "gemini-flash": 1_048_576,
     "claude-3-5-sonnet": 200_000,
     "claude-3-5-haiku": 200_000,
 }
 DEFAULT_RESERVED_OUTPUT_TOKENS = 2048
+#: Calibrated in Phase 4 against real templates (commit_conventional: ~329 tokens,
+#: commit_plain: ~210 tokens, pr_summary: ~206 tokens); 500 tokens provides a safe
+#: upper bound with ~170+ tokens of headroom for dynamic summary notes.
 DEFAULT_TEMPLATE_OVERHEAD = 500
 
 

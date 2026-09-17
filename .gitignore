@@ -69,7 +69,4 @@ Thumbs.db
 # Agent tooling droppings (not part of this project)
 .agents/
 
-#md files
-plan.md
-
 gitmate.architecture.json

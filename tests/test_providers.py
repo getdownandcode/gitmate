@@ -201,3 +201,11 @@ def test_is_like_provider_protocol(tmp_path: Path) -> None:
     cached = CachedProvider(FakeProvider(), cache_dir=tmp_path)
     assert isinstance(cached, LLMProvider)
     cached.close()
+
+
+def test_retryable_error_alias() -> None:
+    from gitmate.providers.base import RetryableError, RetryableProviderError
+
+    assert RetryableError is RetryableProviderError
+    err = RetryableError("transient")
+    assert isinstance(err, RetryableProviderError)

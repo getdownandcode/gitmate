@@ -195,3 +195,8 @@ def test_max_context_tokens_must_exceed_reserved_plus_overhead(tmp_config_dir: P
         match="must be greater than 'reserved_output_tokens' \\+ 'template_overhead'",
     ):
         load_config()
+
+
+def test_gemini_flash_non_lite_context_window() -> None:
+    cfg = GitmateConfig(model="gemini-3.5-flash")
+    assert get_context_window(cfg) == 1_048_576

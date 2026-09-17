@@ -14,6 +14,10 @@ class RetryableProviderError(Exception):
     """Internal marker for transient failures worth retrying before giving up."""
 
 
+#: Alias for RetryableProviderError matching review checklist naming.
+RetryableError = RetryableProviderError
+
+
 @dataclass
 class LLMResponse:
     """Text plus optional token usage from one provider call."""

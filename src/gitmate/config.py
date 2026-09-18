@@ -32,6 +32,8 @@ DEFAULT_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     # the configured default above.
     "gemini-3.5-flash": 1_048_576,
     "gemini-3-flash": 1_048_576,
+    "gemini-3-flash-preview": 1_048_576,
+    "gemini-3-flash-lite-preview": 1_048_576,
     "gemini-flash": 1_048_576,
     "claude-3-5-sonnet": 200_000,
     "claude-3-5-haiku": 200_000,

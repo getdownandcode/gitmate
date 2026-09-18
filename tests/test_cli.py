@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -28,10 +29,9 @@ def test_help_lists_all_commands() -> None:
 
 
 def test_stubs_report_not_implemented() -> None:
-    for name in ("pr-summary", "changelog", "doc"):
-        result = runner.invoke(cli.app, [name])
-        assert result.exit_code == 0
-        assert "not implemented" in result.output
+    result = runner.invoke(cli.app, ["doc"])
+    assert result.exit_code == 0
+    assert "not implemented" in result.output
 
 
 def test_config_show_reports_key_status(
@@ -424,3 +424,31 @@ def test_stats_cli_invalid_days(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     res = runner.invoke(cli.app, ["stats", "--days", "0"])
     assert res.exit_code != 0
     assert "positive integer" in res.output
+
+
+def test_pr_summary_cli_command(git_repo: Path) -> None:
+    res = runner.invoke(cli.app, ["pr-summary", "--no-copy"])
+    assert res.exit_code == 0
+    assert "PR Summary" in res.output or "No changes" in res.output
+
+
+def test_changelog_cli_command(git_repo: Path, tmp_path: Path) -> None:
+    from conftest import commit_file
+
+    subprocess.run(["git", "tag", "v0.1.0"], cwd=git_repo, check=True)
+    commit_file(git_repo, "foo.py", "foo = 1", "feat: add foo")
+    subprocess.run(["git", "tag", "v0.2.0"], cwd=git_repo, check=True)
+
+    # Test stdout output
+    res = runner.invoke(cli.app, ["changelog", "--from", "v0.1.0", "--to", "v0.2.0"])
+    assert res.exit_code == 0
+    assert "Release Notes" in res.output or "feat" in res.output
+
+    # Test file output
+    out_file = tmp_path / "RELEASE.md"
+    res_file = runner.invoke(
+        cli.app, ["changelog", "--from", "v0.1.0", "--to", "v0.2.0", "-o", str(out_file)]
+    )
+    assert res_file.exit_code == 0
+    assert out_file.exists()
+    assert "Release Notes" in out_file.read_text(encoding="utf-8")

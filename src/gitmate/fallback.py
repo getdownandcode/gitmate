@@ -11,6 +11,7 @@ from gitmate import config as config_mod
 from gitmate.chunking import summarize_omitted_diffs
 from gitmate.config import API_KEY_ACCOUNT, GitmateConfig
 from gitmate.diff_extractor import FileDiff
+from gitmate.metrics import calculate_cost
 from gitmate.prompt import load_template, render_commit_prompt
 from gitmate.providers.base import LLMProvider, ProviderUnavailable
 from gitmate.providers.cache import CachedProvider, cache_key
@@ -54,6 +55,7 @@ class GenerationResult:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cache_hit: bool = False
+    estimated_cost_usd: float = 0.0
 
 
 def _extract_scope(path_str: str) -> str | None:
@@ -242,7 +244,7 @@ def generate_commit_message(
     active_provider: LLMProvider
     if provider is not None:
         if bypass_cache and isinstance(provider, CachedProvider):
-            active_provider = provider._provider
+            active_provider = provider.underlying
         else:
             active_provider = provider
     else:
@@ -273,10 +275,11 @@ def generate_commit_message(
         )
 
     # 2. Generation / Chunk-and-summarize with graceful fallback on provider failure
-    try:
-        total_input_tokens = 0
-        total_output_tokens = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    chunk_cost = 0.0
 
+    try:
         if decision.strategy is BudgetStrategy.NEEDS_CHUNKING:
             if not decision.omitted_diffs:
                 if console is not None:
@@ -298,6 +301,14 @@ def generate_commit_message(
             )
             total_input_tokens += chunk_in
             total_output_tokens += chunk_out
+            if chunk_in or chunk_out:
+                chunk_cost = calculate_cost(
+                    model=cfg.model,
+                    tokens_in=chunk_in or None,
+                    tokens_out=chunk_out or None,
+                    cache_hit=False,
+                    fallback_used=False,
+                )
 
             summary_note = (
                 f"{decision.summary_note}\n\nSummaries of large omitted files:\n{merged_summaries}"
@@ -327,6 +338,15 @@ def generate_commit_message(
         if resp.output_tokens is not None:
             total_output_tokens += resp.output_tokens
 
+        final_cost = calculate_cost(
+            model=resp.model,
+            tokens_in=resp.input_tokens,
+            tokens_out=resp.output_tokens,
+            cache_hit=cache_hit,
+            fallback_used=False,
+        )
+        cost = round(chunk_cost + final_cost, 6)
+
         return GenerationResult(
             text=resp.text,
             is_fallback=False,
@@ -334,6 +354,7 @@ def generate_commit_message(
             input_tokens=total_input_tokens or None,
             output_tokens=total_output_tokens or None,
             cache_hit=cache_hit,
+            estimated_cost_usd=cost,
         )
 
     except ProviderUnavailable as exc:
@@ -345,5 +366,8 @@ def generate_commit_message(
             text=fallback_msg,
             is_fallback=True,
             model=cfg.model,
+            input_tokens=total_input_tokens or None,
+            output_tokens=total_output_tokens or None,
+            estimated_cost_usd=chunk_cost,
             fallback_reason=str(exc),
         )

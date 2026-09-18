@@ -47,6 +47,11 @@ class CachedProvider:
         self._ttl = ttl
         self._template_version = template_version
 
+    @property
+    def underlying(self) -> LLMProvider:
+        """Return the wrapped LLMProvider."""
+        return self._provider
+
     def generate(self, prompt: str, model: str) -> LLMResponse:
         """Return a cached response when present, else generate and store."""
         key = cache_key(prompt, model, self._template_version)

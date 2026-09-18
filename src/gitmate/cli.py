@@ -41,6 +41,83 @@ def commit(
 
 
 @app.command()
+def stats(
+    days: int | None = typer.Option(None, "--days", "-d", help="Limit stats to the last N days."),
+    month: bool = typer.Option(
+        False, "--month", "-m", help="Show stats for current calendar month."
+    ),
+    raw: bool = typer.Option(
+        False, "--raw", help="Output raw JSON for scripting or README tables."
+    ),
+) -> None:
+    """Display telemetry metrics, cache hit rate, token usage, and estimated spend."""
+    import json
+    from dataclasses import asdict
+    from datetime import UTC, datetime, timedelta
+
+    from gitmate.metrics import get_aggregate_stats
+
+    since: datetime | None = None
+    now = datetime.now(UTC)
+    if month:
+        since = datetime(now.year, now.month, 1, tzinfo=UTC)
+    elif days is not None:
+        if days <= 0:
+            raise typer.BadParameter("--days must be a positive integer.")
+        since = now - timedelta(days=days)
+
+    stats_data = get_aggregate_stats(since=since)
+
+    if raw:
+        typer.echo(json.dumps(asdict(stats_data), indent=2))
+        return
+
+    if stats_data.total_invocations == 0:
+        console.print(
+            "[yellow]No invocations recorded yet. Run 'gitmate commit' to start collecting metrics.[/yellow]"
+        )
+        return
+
+    time_label = "Current Month" if month else (f"Last {days} Days" if days else "All Time")
+    table = Table(title=f"gitmate stats ({time_label})", show_header=True)
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right")
+
+    table.add_row("Total Invocations", str(stats_data.total_invocations))
+    table.add_row("Cache Hits", f"{stats_data.cache_hits} ({stats_data.cache_hit_rate:.1f}%)")
+    table.add_row(
+        "Tokens (In / Out / Total)",
+        f"{stats_data.total_tokens_in:,} / {stats_data.total_tokens_out:,} / {stats_data.total_tokens:,}",
+    )
+    table.add_row("Estimated Spend", f"${stats_data.total_cost_usd:.4f}")
+    table.add_row("Avg Latency (Overall)", f"{stats_data.avg_latency_ms:.0f} ms")
+    table.add_row("Avg Latency (Cache Hit)", f"{stats_data.avg_latency_hit_ms:.0f} ms")
+    table.add_row("Avg Latency (Cache Miss)", f"{stats_data.avg_latency_miss_ms:.0f} ms")
+    table.add_row("Fallback Templates Used", str(stats_data.fallback_count))
+
+    console.print(table)
+
+    if stats_data.by_command:
+        cmd_table = Table(title="By Command", show_header=True)
+        cmd_table.add_column("Command")
+        cmd_table.add_column("Runs", justify="right")
+        cmd_table.add_column("Hit Rate", justify="right")
+        cmd_table.add_column("Tokens", justify="right")
+        cmd_table.add_column("Spend", justify="right")
+        cmd_table.add_column("Avg Latency", justify="right")
+        for cmd, b in sorted(stats_data.by_command.items()):
+            cmd_table.add_row(
+                cmd,
+                str(b.invocations),
+                f"{b.cache_hit_rate:.1f}%",
+                f"{b.total_tokens:,}",
+                f"${b.cost_usd:.4f}",
+                f"{b.avg_latency_ms:.0f} ms",
+            )
+        console.print(cmd_table)
+
+
+@app.command()
 def pr_summary() -> None:
     """Generate a PR description for the current branch."""
     _stub("pr-summary", "coming in Phase 7")

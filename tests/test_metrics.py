@@ -212,3 +212,256 @@ def test_record_invocation_suppresses_sqlite_and_io_errors(
     # 2. Non-existent path get_invocations returns empty list without error
     non_existent = tmp_path / "does_not_exist" / "metrics.db"
     assert get_invocations(db_path=non_existent) == []
+
+
+def test_calculate_cost() -> None:
+    from gitmate.metrics import calculate_cost
+
+    # Gemini Flash-Lite: $0.30 / 1M in, $2.50 / 1M out
+    # 100_000 in ($0.03) + 10_000 out ($0.025) = $0.055
+    cost = calculate_cost(
+        model="gemini-3.5-flash-lite",
+        tokens_in=100_000,
+        tokens_out=10_000,
+        cache_hit=False,
+        fallback_used=False,
+    )
+    assert cost == 0.055
+
+    # Gemini 3 Flash / Preview: $0.50 / 1M in, $3.00 / 1M out
+    # 100_000 in ($0.05) + 10_000 out ($0.03) = $0.08
+    cost_flash = calculate_cost(
+        model="gemini-3-flash",
+        tokens_in=100_000,
+        tokens_out=10_000,
+        cache_hit=False,
+        fallback_used=False,
+    )
+    assert cost_flash == 0.08
+
+    # Unknown model warns and returns $0.0
+    cost_unknown = calculate_cost(
+        model="unknown-custom-model",
+        tokens_in=100_000,
+        tokens_out=10_000,
+    )
+    assert cost_unknown == 0.0
+
+    # Cache hit is always $0.0
+    assert (
+        calculate_cost(
+            model="gemini-3.5-flash-lite",
+            tokens_in=100_000,
+            tokens_out=10_000,
+            cache_hit=True,
+        )
+        == 0.0
+    )
+
+    # Fallback template is always $0.0
+    assert (
+        calculate_cost(
+            model="gemini-3.5-flash-lite",
+            tokens_in=100_000,
+            tokens_out=10_000,
+            fallback_used=True,
+        )
+        == 0.0
+    )
+
+    # Zero tokens is $0.0
+    assert calculate_cost("gemini-3.5-flash-lite", 0, 0) == 0.0
+    assert calculate_cost("gemini-3.5-flash-lite", None, None) == 0.0
+
+    # Claude 3.5 Sonnet: $3.00 / 1M in, $15.00 / 1M out
+    # 10_000 in ($0.03) + 1_000 out ($0.015) = $0.045
+    cost_claude = calculate_cost("claude-3-5-sonnet", 10_000, 1_000)
+    assert cost_claude == 0.045
+
+
+def test_schema_migration_adds_estimated_cost_column(tmp_path: Path) -> None:
+    db_file = tmp_path / "legacy_metrics.db"
+    # Create Phase 5 legacy schema without estimated_cost_usd
+    legacy_sql = """
+    CREATE TABLE invocations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL,
+        command TEXT NOT NULL,
+        model TEXT NOT NULL,
+        tokens_in INTEGER,
+        tokens_out INTEGER,
+        cache_hit INTEGER NOT NULL,
+        latency_ms INTEGER,
+        fallback_used INTEGER NOT NULL
+    );
+    INSERT INTO invocations (
+        timestamp, command, model, tokens_in, tokens_out, cache_hit, latency_ms, fallback_used
+    ) VALUES ('2026-09-01T12:00:00Z', 'commit', 'gemini-3.5-flash-lite', 100, 20, 0, 200, 0);
+    """
+    conn = sqlite3.connect(db_file)
+    conn.executescript(legacy_sql)
+    conn.close()
+
+    # Now call init_db and get_invocations on the legacy file
+    init_db(db_file)
+    records = get_invocations(db_file)
+    assert len(records) == 1
+    assert records[0].estimated_cost_usd == 0.0
+
+    # Record a new invocation on the migrated DB
+    record_invocation(
+        command="commit",
+        model="gemini-3.5-flash-lite",
+        tokens_in=1_000_000,
+        tokens_out=1_000_000,
+        cache_hit=False,
+        latency_ms=300,
+        fallback_used=False,
+        db_path=db_file,
+    )
+    records_after = get_invocations(db_file)
+    assert len(records_after) == 2
+    # Second record has calculated cost: 0.30 + 2.50 = 2.80
+    assert records_after[1].estimated_cost_usd == 2.80
+
+
+def test_get_monthly_spend(metrics_dir: Path) -> None:
+    from gitmate.metrics import get_monthly_spend
+
+    # September 2026
+    record_invocation(
+        command="commit",
+        model="m",
+        tokens_in=100,
+        tokens_out=100,
+        cache_hit=False,
+        latency_ms=100,
+        fallback_used=False,
+        estimated_cost_usd=0.05,
+        timestamp="2026-09-10T10:00:00Z",
+    )
+    record_invocation(
+        command="commit",
+        model="m",
+        tokens_in=100,
+        tokens_out=100,
+        cache_hit=False,
+        latency_ms=100,
+        fallback_used=False,
+        estimated_cost_usd=0.03,
+        timestamp="2026-09-15T12:00:00Z",
+    )
+    # August 2026
+    record_invocation(
+        command="commit",
+        model="m",
+        tokens_in=100,
+        tokens_out=100,
+        cache_hit=False,
+        latency_ms=100,
+        fallback_used=False,
+        estimated_cost_usd=0.20,
+        timestamp="2026-08-20T12:00:00Z",
+    )
+
+    sep_spend = get_monthly_spend(year=2026, month=9)
+    assert sep_spend == 0.08
+
+    aug_spend = get_monthly_spend(year=2026, month=8)
+    assert aug_spend == 0.20
+
+    oct_spend = get_monthly_spend(year=2026, month=10)
+    assert oct_spend == 0.0
+
+
+def test_get_aggregate_stats(metrics_dir: Path) -> None:
+    from datetime import UTC, datetime
+
+    from gitmate.metrics import get_aggregate_stats
+
+    # Empty DB stats
+    empty_stats = get_aggregate_stats()
+    assert empty_stats.total_invocations == 0
+    assert empty_stats.cache_hit_rate == 0.0
+    assert empty_stats.total_cost_usd == 0.0
+
+    # Populate with diverse entries
+    # 1. Commit cache miss
+    record_invocation(
+        command="commit",
+        model="gemini-3.5-flash-lite",
+        tokens_in=1000,
+        tokens_out=200,
+        cache_hit=False,
+        latency_ms=500,
+        fallback_used=False,
+        estimated_cost_usd=0.001,
+        timestamp="2026-09-10T10:00:00Z",
+    )
+    # 2. Commit cache hit
+    record_invocation(
+        command="commit",
+        model="gemini-3.5-flash-lite",
+        tokens_in=1000,
+        tokens_out=200,
+        cache_hit=True,
+        latency_ms=10,
+        fallback_used=False,
+        estimated_cost_usd=0.0,
+        timestamp="2026-09-11T10:00:00Z",
+    )
+    # 3. Fallback commit
+    record_invocation(
+        command="commit",
+        model="gemini-3.5-flash-lite",
+        tokens_in=0,
+        tokens_out=0,
+        cache_hit=False,
+        latency_ms=5,
+        fallback_used=True,
+        estimated_cost_usd=0.0,
+        timestamp="2026-09-12T10:00:00Z",
+    )
+    # 4. PR summary command
+    record_invocation(
+        command="pr_summary",
+        model="gemini-3.5-flash",
+        tokens_in=2000,
+        tokens_out=500,
+        cache_hit=False,
+        latency_ms=800,
+        fallback_used=False,
+        estimated_cost_usd=0.005,
+        timestamp="2026-09-15T10:00:00Z",
+    )
+
+    stats = get_aggregate_stats()
+    assert stats.total_invocations == 4
+    assert stats.cache_hits == 1
+    assert stats.cache_hit_rate == 25.0
+    assert stats.total_tokens_in == 4000
+    assert stats.total_tokens_out == 900
+    assert stats.total_tokens == 4900
+    assert stats.total_cost_usd == 0.006
+    assert stats.fallback_count == 1
+    assert stats.avg_latency_hit_ms == 10.0
+    assert stats.avg_latency_miss_ms == 435.0  # (500 + 5 + 800) / 3 = 435.0
+
+    # Check command breakdown
+    assert "commit" in stats.by_command
+    assert stats.by_command["commit"].invocations == 3
+    assert stats.by_command["commit"].cache_hits == 1
+    assert stats.by_command["commit"].cache_hit_rate == 33.3
+
+    assert "pr_summary" in stats.by_command
+    assert stats.by_command["pr_summary"].invocations == 1
+
+    # Check model breakdown
+    assert "gemini-3.5-flash-lite" in stats.by_model
+    assert "gemini-3.5-flash" in stats.by_model
+
+    # Check since filtering
+    since_dt = datetime(2026, 9, 14, tzinfo=UTC)
+    filtered = get_aggregate_stats(since=since_dt)
+    assert filtered.total_invocations == 1
+    assert filtered.by_command["pr_summary"].invocations == 1

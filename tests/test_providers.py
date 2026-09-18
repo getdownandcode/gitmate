@@ -209,3 +209,12 @@ def test_retryable_error_alias() -> None:
     assert RetryableError is RetryableProviderError
     err = RetryableError("transient")
     assert isinstance(err, RetryableProviderError)
+
+
+def test_cached_provider_underlying_property(tmp_path: Path) -> None:
+    fake = FakeProvider("output")
+    cached = CachedProvider(provider=fake, cache_dir=tmp_path)
+    try:
+        assert cached.underlying is fake
+    finally:
+        cached.close()

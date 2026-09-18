@@ -308,6 +308,7 @@ def generate_commit_message(
                     tokens_out=chunk_out or None,
                     cache_hit=False,
                     fallback_used=False,
+                    free_tier=cfg.free_tier,
                 )
 
             summary_note = (
@@ -344,6 +345,7 @@ def generate_commit_message(
             tokens_out=resp.output_tokens,
             cache_hit=cache_hit,
             fallback_used=False,
+            free_tier=cfg.free_tier,
         )
         cost = round(chunk_cost + final_cost, 6)
 

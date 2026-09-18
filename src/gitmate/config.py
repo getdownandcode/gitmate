@@ -64,6 +64,7 @@ class GitmateConfig:
     template_overhead: int = DEFAULT_TEMPLATE_OVERHEAD
     cache_dir: str | None = None
     allow_noninteractive_commit: bool = False
+    free_tier: bool = False
 
 
 class SecretStore(Protocol):
@@ -209,6 +210,11 @@ def load_config(path: Path | None = None) -> GitmateConfig:
         )
     allow_noninteractive = allow_noninteractive_raw
 
+    free_tier_raw = raw.get("free_tier", False)
+    if not isinstance(free_tier_raw, bool):
+        raise ConfigError(f"cannot parse {resolved}: 'free_tier' must be a boolean")
+    free_tier = free_tier_raw
+
     return GitmateConfig(
         model=model,
         commit_style=style,
@@ -219,6 +225,7 @@ def load_config(path: Path | None = None) -> GitmateConfig:
         template_overhead=overhead,
         cache_dir=cache_dir,
         allow_noninteractive_commit=allow_noninteractive,
+        free_tier=free_tier,
     )
 
 
@@ -241,4 +248,6 @@ def save_config(cfg: GitmateConfig, path: Path | None = None) -> None:
         data["cache_dir"] = cfg.cache_dir
     if cfg.allow_noninteractive_commit:
         data["allow_noninteractive_commit"] = cfg.allow_noninteractive_commit
+    if cfg.free_tier:
+        data["free_tier"] = cfg.free_tier
     resolved.write_text(tomli_w.dumps(data), encoding="utf-8")

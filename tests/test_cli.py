@@ -288,11 +288,24 @@ def test_config_set_allow_noninteractive_commit(tmp_config_dir: Path) -> None:
     assert "must be 'true' or 'false'" in res.output
 
 
+def test_config_set_free_tier(tmp_config_dir: Path) -> None:
+    # Set True
+    res = runner.invoke(cli.app, ["config", "set", "free_tier", "true"])
+    assert res.exit_code == 0
+    assert load_config().free_tier is True
+
+    # Set False
+    res = runner.invoke(cli.app, ["config", "set", "free_tier", "false"])
+    assert res.exit_code == 0
+    assert load_config().free_tier is False
+
+
 def test_config_show_displays_allow_noninteractive_commit(tmp_config_dir: Path) -> None:
     res = runner.invoke(cli.app, ["config", "show"])
     assert res.exit_code == 0
     assert "allow_noninteractive_commit" in res.output
     assert "False" in res.output
+    assert "free_tier" in res.output
 
 
 def test_stats_cli_empty_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

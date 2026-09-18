@@ -17,6 +17,8 @@ DEFAULT_DB_FILENAME = "metrics.db"
 METRICS_DIR_ENV_VAR = "GITMATE_METRICS_DIR"
 
 #: Model pricing in USD per 1,000,000 tokens (input_rate, output_rate).
+#: NOTE: Upstream rates change over time. Verify against https://ai.google.dev/pricing
+#: and https://docs.anthropic.com/pricing before relying on this for real financial reports.
 MODEL_PRICING: dict[str, tuple[float, float]] = {
     "gemini-3.5-flash-lite": (0.30, 2.50),
     "gemini-flash-lite": (0.30, 2.50),
@@ -102,12 +104,13 @@ def calculate_cost(
     tokens_out: int | None,
     cache_hit: bool = False,
     fallback_used: bool = False,
+    free_tier: bool = False,
 ) -> float:
     """Calculate estimated cost in USD based on model pricing table.
 
-    Cache hits and template fallbacks consume zero billed API tokens ($0.00).
+    Cache hits, template fallbacks, and free-tier Gemini usage consume zero billed API tokens ($0.00).
     """
-    if cache_hit or fallback_used:
+    if cache_hit or fallback_used or (free_tier and model.startswith("gemini")):
         return 0.0
     in_tokens = tokens_in or 0
     out_tokens = tokens_out or 0
@@ -178,6 +181,7 @@ def record_invocation(
     estimated_cost_usd: float | None = None,
     db_path: Path | str | None = None,
     timestamp: str | None = None,
+    free_tier: bool = False,
 ) -> None:
     """Record an invocation into SQLite database at db_path or default.
 
@@ -197,6 +201,7 @@ def record_invocation(
                 tokens_out=tokens_out,
                 cache_hit=cache_hit,
                 fallback_used=fallback_used,
+                free_tier=free_tier,
             )
         )
 
@@ -251,21 +256,38 @@ def get_invocations(
             cursor = conn.cursor()
             cursor.execute(query)
             rows = cursor.fetchall()
-            return [
-                InvocationRecord(
-                    id=row["id"],
-                    timestamp=row["timestamp"],
-                    command=row["command"],
-                    model=row["model"],
-                    tokens_in=row["tokens_in"],
-                    tokens_out=row["tokens_out"],
-                    cache_hit=bool(row["cache_hit"]),
-                    latency_ms=row["latency_ms"],
-                    fallback_used=bool(row["fallback_used"]),
-                    estimated_cost_usd=float(row["estimated_cost_usd"]),
+            records: list[InvocationRecord] = []
+            for row in rows:
+                raw_cost = float(row["estimated_cost_usd"])
+                # If an older row had tokens but $0.00 was recorded (and not cache hit or fallback),
+                # recalculate it at read-time against current pricing table:
+                if (
+                    raw_cost == 0.0
+                    and not bool(row["cache_hit"])
+                    and not bool(row["fallback_used"])
+                    and ((row["tokens_in"] or 0) > 0 or (row["tokens_out"] or 0) > 0)
+                ):
+                    raw_cost = calculate_cost(
+                        model=row["model"],
+                        tokens_in=row["tokens_in"],
+                        tokens_out=row["tokens_out"],
+                    )
+
+                records.append(
+                    InvocationRecord(
+                        id=row["id"],
+                        timestamp=row["timestamp"],
+                        command=row["command"],
+                        model=row["model"],
+                        tokens_in=row["tokens_in"],
+                        tokens_out=row["tokens_out"],
+                        cache_hit=bool(row["cache_hit"]),
+                        latency_ms=row["latency_ms"],
+                        fallback_used=bool(row["fallback_used"]),
+                        estimated_cost_usd=raw_cost,
+                    )
                 )
-                for row in rows
-            ]
+            return records
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to retrieve invocations from metrics DB: %s", exc)
         return []
@@ -283,26 +305,11 @@ def get_monthly_spend(
     now = datetime.now(UTC)
     y = year if year is not None else now.year
     m = month if month is not None else now.month
-    prefix = f"{y:04d}-{m:02d}%"
+    prefix = f"{y:04d}-{m:02d}"
 
-    try:
-        target = get_metrics_db_path(db_path)
-        if not target.exists():
-            return 0.0
-        conn = sqlite3.connect(target, timeout=5.0)
-        with contextlib.closing(conn):
-            _ensure_schema(conn)
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT COALESCE(SUM(estimated_cost_usd), 0.0) FROM invocations WHERE timestamp LIKE ?",
-                (prefix,),
-            )
-            row = cursor.fetchone()
-            val = float(row[0]) if row and row[0] is not None else 0.0
-            return round(val, 6)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to calculate monthly spend: %s", exc)
-        return 0.0
+    records = get_invocations(db_path=db_path)
+    month_spend = sum(r.estimated_cost_usd for r in records if r.timestamp.startswith(prefix))
+    return round(month_spend, 6)
 
 
 def _build_breakdown(records: list[InvocationRecord]) -> BreakdownStats:

@@ -278,6 +278,13 @@ def test_calculate_cost() -> None:
     cost_claude = calculate_cost("claude-3-5-sonnet", 10_000, 1_000)
     assert cost_claude == 0.045
 
+    # Free tier: Gemini models calculate as $0.0
+    cost_free_gemini = calculate_cost("gemini-3.5-flash-lite", 100_000, 10_000, free_tier=True)
+    assert cost_free_gemini == 0.0
+    # Free tier: Non-Gemini models remain billed
+    cost_free_claude = calculate_cost("claude-3-5-sonnet", 10_000, 1_000, free_tier=True)
+    assert cost_free_claude == 0.045
+
 
 def test_schema_migration_adds_estimated_cost_column(tmp_path: Path) -> None:
     db_file = tmp_path / "legacy_metrics.db"
@@ -306,7 +313,8 @@ def test_schema_migration_adds_estimated_cost_column(tmp_path: Path) -> None:
     init_db(db_file)
     records = get_invocations(db_file)
     assert len(records) == 1
-    assert records[0].estimated_cost_usd == 0.0
+    # Read-time re-pricing recalculates legacy row: 100 in ($0.00003) + 20 out ($0.00005) = 0.00008
+    assert records[0].estimated_cost_usd == 0.00008
 
     # Record a new invocation on the migrated DB
     record_invocation(

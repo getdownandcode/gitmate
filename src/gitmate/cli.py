@@ -252,12 +252,12 @@ def config_set(field: str, value: str) -> None:
             setattr(cfg, field, int_val)
     elif field == "cache_dir":
         cfg.cache_dir = None if value in ("", "none") else value.strip() or None
-    elif field == "allow_noninteractive_commit":
+    elif field in ("allow_noninteractive_commit", "free_tier"):
         val_clean = value.strip().lower()
         if val_clean == "true":
-            cfg.allow_noninteractive_commit = True
+            setattr(cfg, field, True)
         elif val_clean == "false":
-            cfg.allow_noninteractive_commit = False
+            setattr(cfg, field, False)
         else:
             raise typer.BadParameter(f"'{field}' must be 'true' or 'false'.")
     elif field in ("model", "commit_style"):

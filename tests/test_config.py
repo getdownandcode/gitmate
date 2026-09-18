@@ -234,3 +234,35 @@ def test_allow_noninteractive_commit_invalid_types_raise(
     config_path().write_text(f"allow_noninteractive_commit = {bad_val}\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="'allow_noninteractive_commit' must be a boolean"):
         load_config()
+
+
+def test_free_tier_default_false(tmp_config_dir: Path) -> None:
+    assert GitmateConfig().free_tier is False
+    assert load_config().free_tier is False
+
+
+def test_free_tier_save_load_round_trip(tmp_config_dir: Path) -> None:
+    cfg = GitmateConfig(free_tier=True)
+    save_config(cfg)
+
+    content = config_path().read_text(encoding="utf-8")
+    assert "free_tier = true" in content
+
+    loaded = load_config()
+    assert loaded.free_tier is True
+
+
+def test_free_tier_omitted_when_false(tmp_config_dir: Path) -> None:
+    cfg = GitmateConfig(free_tier=False)
+    save_config(cfg)
+
+    content = config_path().read_text(encoding="utf-8")
+    assert "free_tier" not in content
+
+
+@pytest.mark.parametrize("bad_val", ['"true"', '"false"', "1", "0", "1.5", "[true]"])
+def test_free_tier_invalid_types_raise(tmp_config_dir: Path, bad_val: str) -> None:
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(f"free_tier = {bad_val}\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="'free_tier' must be a boolean"):
+        load_config()

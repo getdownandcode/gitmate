@@ -374,6 +374,38 @@ def test_stats_cli_raw_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert "commit" in data["by_command"]
 
 
+def test_stats_cli_raw_json_long_model_name_no_rewrapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ensure long model names (100+ chars) do not get line-wrapped and break JSON parsing."""
+    import json
+
+    from gitmate.metrics import record_invocation
+
+    m_dir = tmp_path / "long_model_metrics"
+    monkeypatch.setenv("GITMATE_METRICS_DIR", str(m_dir))
+
+    long_model = "custom-organization-deployment-fine-tuned-gemini-3-flash-preview-endpoint-accelerated-v2-long-identifier-string"
+    assert len(long_model) > 100
+
+    record_invocation(
+        command="commit",
+        model=long_model,
+        tokens_in=5000,
+        tokens_out=250,
+        cache_hit=False,
+        latency_ms=120,
+        fallback_used=False,
+    )
+
+    res = runner.invoke(cli.app, ["stats", "--raw"])
+    assert res.exit_code == 0
+    # Must parse cleanly without JSONDecodeError caused by line-wrapping
+    data = json.loads(res.output)
+    assert long_model in data["by_model"]
+    assert data["by_model"][long_model]["invocations"] == 1
+
+
 def test_stats_cli_invalid_days(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITMATE_METRICS_DIR", str(tmp_path / "metrics"))
     res = runner.invoke(cli.app, ["stats", "--days", "0"])

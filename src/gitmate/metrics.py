@@ -18,15 +18,16 @@ METRICS_DIR_ENV_VAR = "GITMATE_METRICS_DIR"
 
 #: Model pricing in USD per 1,000,000 tokens (input_rate, output_rate).
 MODEL_PRICING: dict[str, tuple[float, float]] = {
-    "gemini-3.5-flash-lite": (0.075, 0.30),
-    "gemini-flash-lite": (0.075, 0.30),
-    "gemini-3.5-flash": (0.15, 0.60),
-    "gemini-3-flash": (0.15, 0.60),
-    "gemini-flash": (0.15, 0.60),
+    "gemini-3.5-flash-lite": (0.30, 2.50),
+    "gemini-flash-lite": (0.30, 2.50),
+    "gemini-3.5-flash": (0.50, 3.00),
+    "gemini-3-flash": (0.50, 3.00),
+    "gemini-3-flash-preview": (0.50, 3.00),
+    "gemini-flash": (0.50, 3.00),
     "claude-3-5-haiku": (0.80, 4.00),
     "claude-3-5-sonnet": (3.00, 15.00),
 }
-DEFAULT_PRICING: tuple[float, float] = (0.075, 0.30)
+DEFAULT_PRICING: tuple[float, float] = (0.50, 3.00)
 
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS invocations (
@@ -113,7 +114,11 @@ def calculate_cost(
     if in_tokens == 0 and out_tokens == 0:
         return 0.0
 
-    in_rate, out_rate = MODEL_PRICING.get(model, DEFAULT_PRICING)
+    if model not in MODEL_PRICING:
+        logger.warning("Unknown model '%s'; estimated cost recorded as $0.0", model)
+        return 0.0
+
+    in_rate, out_rate = MODEL_PRICING[model]
     cost = (in_tokens / 1_000_000.0 * in_rate) + (out_tokens / 1_000_000.0 * out_rate)
     return round(cost, 6)
 

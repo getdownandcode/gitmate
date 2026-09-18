@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -275,3 +276,107 @@ def test_generate_commit_message_custom_secret_store() -> None:
 
     assert result.is_fallback is False
     assert result.text == "feat(auth): add login feature"
+
+
+class ChunkSuccessFinalFailProvider:
+    """Mock provider where chunk summarization succeeds but the final prompt fails."""
+
+    def __init__(self, error_msg: str = "503 Service Unavailable") -> None:
+        self.error_msg = error_msg
+        self.call_count = 0
+        self.prompts: list[str] = []
+
+    def generate(self, prompt: str, model: str) -> LLMResponse:
+        self.call_count += 1
+        self.prompts.append(prompt)
+        if self.call_count == 1:
+            # Chunk summarization succeeds
+            return LLMResponse(
+                text="Summarized login logic",
+                model=model,
+                input_tokens=150,
+                output_tokens=25,
+            )
+        # Final commit message prompt fails
+        raise ProviderUnavailable(self.error_msg)
+
+
+def test_generate_commit_message_chunking_success_final_call_fails_preserves_chunk_tokens_and_cost() -> (
+    None
+):
+    """If chunk summarization succeeds but final prompt fails, chunk tokens and spend are preserved in fallback result."""
+    cfg = GitmateConfig(max_context_tokens=2_600, model="gemini-3.5-flash-lite")
+    provider = ChunkSuccessFinalFailProvider(error_msg="503 Service Unavailable")
+    counter = FakeCounter()
+    console = MagicMock(spec=Console)
+
+    result = generate_commit_message(
+        diffs=_sample_diff(),
+        cfg=cfg,
+        provider=provider,
+        counter=counter,
+        console=console,
+    )
+
+    assert result.is_fallback is True
+    assert result.text == "feat(auth): add login.py"
+    assert result.fallback_reason == "503 Service Unavailable"
+    # Chunking tokens MUST be preserved
+    assert result.input_tokens == 150
+    assert result.output_tokens == 25
+    # Spend MUST be non-zero (150 in / 25 out at $0.30 / $2.50 per 1M)
+    assert result.estimated_cost_usd > 0.0
+    expected_chunk_cost = round((150 / 1_000_000 * 0.30) + (25 / 1_000_000 * 2.50), 6)
+    assert result.estimated_cost_usd == expected_chunk_cost
+    console.print.assert_called_once_with(
+        "[yellow]⚠ API unavailable, using template fallback[/yellow]"
+    )
+
+
+def test_generate_commit_message_chunking_with_cached_final_call_preserves_chunk_cost(
+    tmp_path: Path,
+) -> None:
+    """When final prompt hits cache, chunking cost is still preserved rather than zeroed."""
+    from gitmate.metrics import calculate_cost
+    from gitmate.providers.cache import CachedProvider
+
+    cache_dir = tmp_path / "chunk_cache"
+    cfg = GitmateConfig(
+        max_context_tokens=2_600,
+        model="gemini-3.5-flash-lite",
+        cache_dir=str(cache_dir),
+    )
+    counter = FakeCounter()
+
+    raw_provider = FakeProvider(response="feat(auth): login service")
+    cached = CachedProvider(provider=raw_provider, cache_dir=str(cache_dir))
+
+    # 1. First invocation: cache miss
+    res1 = generate_commit_message(
+        diffs=_sample_diff(),
+        cfg=cfg,
+        provider=cached,
+        counter=counter,
+        bypass_cache=False,
+    )
+    assert res1.is_fallback is False
+    assert res1.cache_hit is False
+    assert res1.input_tokens == 300  # 150 chunk + 150 final
+    assert res1.output_tokens == 50  # 25 chunk + 25 final
+    chunk_cost = calculate_cost(model="gemini-3.5-flash-lite", tokens_in=150, tokens_out=25)
+    final_cost = calculate_cost(model="gemini-3.5-flash-lite", tokens_in=150, tokens_out=25)
+    expected_full_cost = round(chunk_cost + final_cost, 6)
+    assert res1.estimated_cost_usd == expected_full_cost
+
+    # 2. Second invocation: final prompt hits cache
+    res2 = generate_commit_message(
+        diffs=_sample_diff(),
+        cfg=cfg,
+        provider=cached,
+        counter=counter,
+        bypass_cache=False,
+    )
+    assert res2.is_fallback is False
+    assert res2.cache_hit is True
+    # Final call cost was 0 (cache hit), but chunk_cost MUST still be preserved!
+    assert res2.estimated_cost_usd == chunk_cost

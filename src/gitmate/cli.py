@@ -69,7 +69,7 @@ def stats(
     stats_data = get_aggregate_stats(since=since)
 
     if raw:
-        console.print(json.dumps(asdict(stats_data), indent=2))
+        typer.echo(json.dumps(asdict(stats_data), indent=2))
         return
 
     if stats_data.total_invocations == 0:

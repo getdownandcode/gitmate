@@ -275,10 +275,11 @@ def generate_commit_message(
         )
 
     # 2. Generation / Chunk-and-summarize with graceful fallback on provider failure
-    try:
-        total_input_tokens = 0
-        total_output_tokens = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    chunk_cost = 0.0
 
+    try:
         if decision.strategy is BudgetStrategy.NEEDS_CHUNKING:
             if not decision.omitted_diffs:
                 if console is not None:
@@ -300,6 +301,14 @@ def generate_commit_message(
             )
             total_input_tokens += chunk_in
             total_output_tokens += chunk_out
+            if chunk_in or chunk_out:
+                chunk_cost = calculate_cost(
+                    model=cfg.model,
+                    tokens_in=chunk_in or None,
+                    tokens_out=chunk_out or None,
+                    cache_hit=False,
+                    fallback_used=False,
+                )
 
             summary_note = (
                 f"{decision.summary_note}\n\nSummaries of large omitted files:\n{merged_summaries}"
@@ -329,13 +338,14 @@ def generate_commit_message(
         if resp.output_tokens is not None:
             total_output_tokens += resp.output_tokens
 
-        cost = calculate_cost(
+        final_cost = calculate_cost(
             model=resp.model,
-            tokens_in=total_input_tokens or None,
-            tokens_out=total_output_tokens or None,
+            tokens_in=resp.input_tokens,
+            tokens_out=resp.output_tokens,
             cache_hit=cache_hit,
             fallback_used=False,
         )
+        cost = round(chunk_cost + final_cost, 6)
 
         return GenerationResult(
             text=resp.text,
@@ -356,5 +366,8 @@ def generate_commit_message(
             text=fallback_msg,
             is_fallback=True,
             model=cfg.model,
+            input_tokens=total_input_tokens or None,
+            output_tokens=total_output_tokens or None,
+            estimated_cost_usd=chunk_cost,
             fallback_reason=str(exc),
         )

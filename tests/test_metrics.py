@@ -217,8 +217,8 @@ def test_record_invocation_suppresses_sqlite_and_io_errors(
 def test_calculate_cost() -> None:
     from gitmate.metrics import calculate_cost
 
-    # Gemini Flash-Lite: $0.075 / 1M in, $0.30 / 1M out
-    # 100_000 in ($0.0075) + 10_000 out ($0.003) = $0.0105
+    # Gemini Flash-Lite: $0.30 / 1M in, $2.50 / 1M out
+    # 100_000 in ($0.03) + 10_000 out ($0.025) = $0.055
     cost = calculate_cost(
         model="gemini-3.5-flash-lite",
         tokens_in=100_000,
@@ -226,7 +226,26 @@ def test_calculate_cost() -> None:
         cache_hit=False,
         fallback_used=False,
     )
-    assert cost == 0.0105
+    assert cost == 0.055
+
+    # Gemini 3 Flash / Preview: $0.50 / 1M in, $3.00 / 1M out
+    # 100_000 in ($0.05) + 10_000 out ($0.03) = $0.08
+    cost_flash = calculate_cost(
+        model="gemini-3-flash",
+        tokens_in=100_000,
+        tokens_out=10_000,
+        cache_hit=False,
+        fallback_used=False,
+    )
+    assert cost_flash == 0.08
+
+    # Unknown model warns and returns $0.0
+    cost_unknown = calculate_cost(
+        model="unknown-custom-model",
+        tokens_in=100_000,
+        tokens_out=10_000,
+    )
+    assert cost_unknown == 0.0
 
     # Cache hit is always $0.0
     assert (
@@ -302,8 +321,8 @@ def test_schema_migration_adds_estimated_cost_column(tmp_path: Path) -> None:
     )
     records_after = get_invocations(db_file)
     assert len(records_after) == 2
-    # Second record has calculated cost: 0.075 + 0.30 = 0.375
-    assert records_after[1].estimated_cost_usd == 0.375
+    # Second record has calculated cost: 0.30 + 2.50 = 2.80
+    assert records_after[1].estimated_cost_usd == 2.80
 
 
 def test_get_monthly_spend(metrics_dir: Path) -> None:

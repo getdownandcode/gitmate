@@ -85,7 +85,7 @@ class GeminiTokenCounter:
 
 
 class HeuristicTokenCounter:
-    """Fast, offline heuristic token counter (~4 characters per token)."""
+    """Test/fallback estimation only (~4 chars/token); not accurate enough for real budget enforcement."""
 
     def count_tokens(self, text: str, model: str) -> int:
         """Estimate token count using 4 chars/token heuristic with a minimum of 1."""

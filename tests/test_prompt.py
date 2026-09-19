@@ -11,6 +11,7 @@ from gitmate.prompt import (
     load_template,
     parse_template_content,
     render_commit_prompt,
+    render_prompt,
 )
 from gitmate.providers.cache import cache_key
 
@@ -22,6 +23,12 @@ def test_load_known_templates() -> None:
         assert template.version == "1"
         assert "$diff" in template.body
         assert template.version_key == f"{template.name}:v1"
+
+    changelog_tpl = load_template("changelog")
+    assert isinstance(changelog_tpl, PromptTemplate)
+    assert changelog_tpl.version == "2"
+    assert changelog_tpl.version_key == "changelog:v2"
+    assert "$commits" in changelog_tpl.body
 
 
 def test_load_template_aliases() -> None:
@@ -91,6 +98,21 @@ def test_render_commit_prompt() -> None:
     assert "+ print('hello')" in prompt_text
     assert "Note: 1 file omitted" in prompt_text
     assert version_key == "commit_conventional:v1"
+
+
+def test_render_prompt_changelog() -> None:
+    prompt_text, version_key = render_prompt(
+        "changelog",
+        from_ref="v1.0.0",
+        to_ref="v1.1.0",
+        commits="- [abc1234] feat: new feature",
+        diff="diff text",
+        summary_note="1 file changed",
+    )
+    assert "v1.0.0..v1.1.0" in prompt_text
+    assert "# Release Notes (v1.1.0)" in prompt_text
+    assert "- [abc1234] feat: new feature" in prompt_text
+    assert version_key == "changelog:v2"
 
 
 def test_template_version_bump_invalidates_cache_key() -> None:

@@ -21,6 +21,7 @@ config_app = typer.Typer(help="View and change gitmate settings.")
 app.add_typer(config_app, name="config")
 
 console = Console()
+err_console = Console(stderr=True)
 secret_store: config_mod.SecretStore = config_mod.KeyringSecretStore()
 
 
@@ -121,6 +122,7 @@ def stats(
 @app.command("pr-summary")
 def pr_summary(
     base: str = typer.Option("main", "--base", "-b", help="Base branch to compare against."),
+    title: str | None = typer.Option(None, "--title", "-t", help="PR title for gh pr create."),
     copy: bool = typer.Option(True, "--copy/--no-copy", help="Copy summary to clipboard."),
     create_pr: bool = typer.Option(
         False, "--create-pr", help="Open GitHub PR create flow with gh CLI."
@@ -131,16 +133,28 @@ def pr_summary(
     from rich.markdown import Markdown
     from rich.panel import Panel
 
-    from gitmate.pr_summary import generate_pr_summary
+    from gitmate.diff_extractor import GitCommandError
+    from gitmate.orchestrator import BudgetCapExceededError
+    from gitmate.pr_summary import GitHubCliError, generate_pr_summary
 
-    res = generate_pr_summary(
-        base=base,
-        console=console,
-        secret_store=secret_store,
-        bypass_cache=bypass_cache,
-        copy_to_cb=copy,
-        create_pr=create_pr,
-    )
+    try:
+        res = generate_pr_summary(
+            base=base,
+            title=title,
+            console=err_console,
+            secret_store=secret_store,
+            bypass_cache=bypass_cache,
+            copy_to_cb=copy,
+            create_pr=create_pr,
+        )
+    except (GitCommandError, BudgetCapExceededError, GitHubCliError) as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
+
+    if res.text.startswith("No changes between"):
+        err_console.print(f"[dim]{res.text}[/dim]")
+        return
+
     status_badge = (
         "[yellow bold]⚠ FALLBACK TEMPLATE[/yellow bold]"
         if res.is_fallback
@@ -173,16 +187,27 @@ def changelog(
 ) -> None:
     """Generate a changelog section between two git tags or revisions."""
     from gitmate.changelog import generate_changelog
+    from gitmate.diff_extractor import GitCommandError
+    from gitmate.orchestrator import BudgetCapExceededError
 
-    res = generate_changelog(
-        from_ref=from_ref,
-        to_ref=to_ref,
-        include_diff=include_diff,
-        output_file=output,
-        console=console,
-        secret_store=secret_store,
-        bypass_cache=bypass_cache,
-    )
+    try:
+        res = generate_changelog(
+            from_ref=from_ref,
+            to_ref=to_ref,
+            include_diff=include_diff,
+            output_file=output,
+            console=err_console,
+            secret_store=secret_store,
+            bypass_cache=bypass_cache,
+        )
+    except (GitCommandError, BudgetCapExceededError) as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
+
+    if res.text.startswith("No commits found"):
+        err_console.print(f"[dim]{res.text}[/dim]")
+        return
+
     if output is None:
         typer.echo(res.text)
 

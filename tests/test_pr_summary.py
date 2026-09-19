@@ -11,8 +11,15 @@ from conftest import commit_file
 from rich.console import Console
 
 from gitmate.config import GitmateConfig
+from gitmate.diff_extractor import GitCommandError
 from gitmate.metrics import get_invocations, record_invocation
-from gitmate.pr_summary import copy_to_clipboard, create_github_pr, generate_pr_summary
+from gitmate.orchestrator import BudgetCapExceededError
+from gitmate.pr_summary import (
+    GitHubCliError,
+    copy_to_clipboard,
+    create_github_pr,
+    generate_pr_summary,
+)
 from gitmate.providers.base import LLMProvider, LLMResponse, ProviderUnavailable
 
 
@@ -173,15 +180,30 @@ def test_pr_summary_budget_cap_exceeded(git_repo: Path, metrics_dir: Path) -> No
 
     cfg = GitmateConfig(budget_cap_usd=5.0)
     con = Console(record=True)
-    res = generate_pr_summary(base="main", cfg=cfg, console=con, repo_dir=git_repo)
-
-    assert res.is_fallback is True
-    assert "Monthly budget cap exceeded" in res.text
-    assert "Monthly budget cap exceeded" in con.export_text()
+    with pytest.raises(BudgetCapExceededError, match="budget cap exceeded"):
+        generate_pr_summary(base="main", cfg=cfg, console=con, repo_dir=git_repo)
+    assert "budget cap exceeded" in con.export_text().lower()
 
 
 def test_pr_summary_git_error(git_repo: Path) -> None:
     con = Console(record=True)
-    res = generate_pr_summary(base="non-existent-branch-xyz", console=con, repo_dir=git_repo)
-    assert res.is_fallback is True
-    assert "Git error" in res.text
+    with pytest.raises(GitCommandError):
+        generate_pr_summary(base="non-existent-branch-xyz", console=con, repo_dir=git_repo)
+
+
+def test_pr_summary_gh_cli_error(git_repo: Path) -> None:
+    subprocess.run(["git", "checkout", "-b", "feature-gh"], cwd=git_repo, check=True)
+    commit_file(git_repo, "feat_gh.py", "x = 42\n", "feat: test gh error")
+
+    provider = FakeProvider()
+    with (
+        patch("gitmate.pr_summary.create_github_pr", return_value=1),
+        pytest.raises(GitHubCliError, match="exit code 1"),
+    ):
+        generate_pr_summary(
+            base="main",
+            provider=provider,
+            repo_dir=git_repo,
+            copy_to_cb=False,
+            create_pr=True,
+        )

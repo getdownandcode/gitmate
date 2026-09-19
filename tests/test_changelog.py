@@ -18,7 +18,9 @@ from gitmate.changelog import (
     parse_commit_message,
 )
 from gitmate.config import GitmateConfig
+from gitmate.diff_extractor import GitCommandError
 from gitmate.metrics import get_invocations, record_invocation
+from gitmate.orchestrator import BudgetCapExceededError
 from gitmate.providers.base import LLMProvider, LLMResponse, ProviderUnavailable
 
 
@@ -76,6 +78,16 @@ def test_parse_commit_message_conventional_breaking() -> None:
     assert entry.commit_type == "fix"
     assert entry.scope == "db"
     assert entry.description == "drop legacy table"
+    assert entry.is_breaking is True
+
+
+def test_parse_commit_message_body_breaking() -> None:
+    entry = parse_commit_message(
+        commit_hash="def456",
+        subject="feat(api): new endpoint",
+        body="BREAKING CHANGE: old endpoint removed",
+    )
+    assert entry.is_breaking is True
 
 
 def test_parse_commit_message_non_conventional() -> None:
@@ -120,11 +132,24 @@ def test_format_commits_for_prompt() -> None:
         CommitLogEntry(
             "123456789", "feat(cli): add stats", "", "Dev", "", "feat", "cli", "add stats"
         ),
+        CommitLogEntry(
+            "987654321",
+            "fix(auth)!: drop tokens",
+            "",
+            "Dev",
+            "",
+            "fix",
+            "auth",
+            "drop tokens",
+            is_breaking=True,
+        ),
     ]
     grouped = group_commits(commits)
     formatted = format_commits_for_prompt(grouped)
     assert "### Features" in formatted
     assert "[1234567] feat(cli): add stats" in formatted
+    assert "### Bug Fixes" in formatted
+    assert "[9876543] fix!(auth): drop tokens" in formatted
 
 
 def test_extract_commits_between_real_git(git_repo: Path) -> None:
@@ -237,10 +262,19 @@ def test_generate_changelog_budget_cap_exceeded(git_repo: Path, metrics_dir: Pat
 
     cfg = GitmateConfig(budget_cap_usd=10.0)
     con = Console(record=True)
-    res = generate_changelog(
-        from_ref="HEAD~1", to_ref="HEAD", cfg=cfg, console=con, repo_dir=git_repo
-    )
+    with pytest.raises(BudgetCapExceededError, match="budget cap exceeded"):
+        generate_changelog(
+            from_ref="HEAD~1", to_ref="HEAD", cfg=cfg, console=con, repo_dir=git_repo
+        )
+    assert "budget cap exceeded" in con.export_text().lower()
 
-    assert res.is_fallback is True
-    assert "Monthly budget cap exceeded" in res.text
-    assert "Monthly budget cap exceeded" in con.export_text()
+
+def test_generate_changelog_git_error(git_repo: Path) -> None:
+    con = Console(record=True)
+    with pytest.raises(GitCommandError):
+        generate_changelog(
+            from_ref="non-existent-tag-xyz",
+            to_ref="HEAD",
+            console=con,
+            repo_dir=git_repo,
+        )

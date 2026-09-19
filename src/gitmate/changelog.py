@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,8 +13,7 @@ from gitmate import config as config_mod
 from gitmate.config import GitmateConfig, SecretStore
 from gitmate.diff_extractor import DiffExtractor, GitCommandError, GitRunner, SubprocessGitRunner
 from gitmate.fallback import generate_fallback_changelog
-from gitmate.metrics import get_monthly_spend, record_invocation
-from gitmate.orchestrator import GenerationResult, run_generation_pipeline
+from gitmate.orchestrator import GenerationResult, check_budget_cap, run_generation_pipeline
 from gitmate.providers.base import LLMProvider
 from gitmate.token_budget import TokenCounter
 
@@ -60,6 +58,7 @@ class CommitLogEntry:
     commit_type: str | None = None
     scope: str | None = None
     description: str | None = None
+    is_breaking: bool = False
 
 
 def parse_commit_message(
@@ -75,6 +74,9 @@ def parse_commit_message(
         c_type = match.group("type").lower()
         scope = match.group("scope")
         desc = match.group("desc").strip()
+        is_breaking = bool(match.group("breaking")) or (
+            "BREAKING CHANGE:" in body or "BREAKING-CHANGE:" in body
+        )
         return CommitLogEntry(
             commit_hash=commit_hash,
             subject=subject.strip(),
@@ -84,8 +86,10 @@ def parse_commit_message(
             commit_type=c_type,
             scope=scope,
             description=desc,
+            is_breaking=is_breaking,
         )
 
+    is_breaking = "BREAKING CHANGE:" in body or "BREAKING-CHANGE:" in body
     return CommitLogEntry(
         commit_hash=commit_hash,
         subject=subject.strip(),
@@ -95,6 +99,7 @@ def parse_commit_message(
         commit_type=None,
         scope=None,
         description=subject.strip(),
+        is_breaking=is_breaking,
     )
 
 
@@ -173,39 +178,12 @@ def format_commits_for_prompt(grouped: dict[str, list[CommitLogEntry]]) -> str:
         for item in items:
             scope_prefix = f"({item.scope}): " if item.scope else ": "
             t = item.commit_type or "other"
+            breaking_marker = "!" if item.is_breaking else ""
             desc = item.description or item.subject
-            sections.append(f"- [{item.commit_hash[:7]}] {t}{scope_prefix}{desc}")
+            sections.append(f"- [{item.commit_hash[:7]}] {t}{breaking_marker}{scope_prefix}{desc}")
         sections.append("")
 
     return "\n".join(sections).strip()
-
-
-def _safe_record_telemetry(
-    command: str,
-    model: str,
-    tokens_in: int | None,
-    tokens_out: int | None,
-    cache_hit: bool,
-    latency_ms: int | None,
-    fallback_used: bool,
-    estimated_cost_usd: float | None = None,
-    free_tier: bool = False,
-) -> None:
-    """Record invocation to metrics database without propagating errors."""
-    try:
-        record_invocation(
-            command=command,
-            model=model,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            cache_hit=cache_hit,
-            latency_ms=latency_ms,
-            fallback_used=fallback_used,
-            estimated_cost_usd=estimated_cost_usd,
-            free_tier=free_tier,
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to record telemetry: %s", exc)
 
 
 def generate_changelog(
@@ -227,46 +205,15 @@ def generate_changelog(
     con = console if console is not None else Console()
     active_cfg = cfg if cfg is not None else config_mod.load_config()
 
-    # Budget cap check
-    if active_cfg.budget_cap_usd is not None:
-        monthly_spend = get_monthly_spend()
-        if monthly_spend >= active_cfg.budget_cap_usd:
-            con.print(
-                f"[red]error:[/red] Monthly budget cap exceeded "
-                f"(${monthly_spend:.2f} >= ${active_cfg.budget_cap_usd:.2f}). "
-                "Aborting to prevent further LLM spend."
-            )
-            return GenerationResult(
-                text="Monthly budget cap exceeded. Generation aborted.",
-                is_fallback=True,
-                model=active_cfg.model,
-                fallback_reason="Monthly budget cap exceeded",
-            )
-        if monthly_spend >= 0.8 * active_cfg.budget_cap_usd:
-            con.print(
-                f"[yellow]warning: Monthly spend has reached {int(monthly_spend / active_cfg.budget_cap_usd * 100)}% "
-                f"of budget cap (${monthly_spend:.2f} / ${active_cfg.budget_cap_usd:.2f}).[/yellow]"
-            )
+    check_budget_cap(active_cfg, console=con)
 
     repo_path = repo_dir if repo_dir is not None else Path.cwd()
     runner = git_runner if git_runner is not None else SubprocessGitRunner()
 
-    try:
-        commits = extract_commits_between(from_ref, to_ref, runner=runner, repo=repo_path)
-    except GitCommandError as exc:
-        con.print(f"[red]git error:[/red] {exc}")
-        return GenerationResult(
-            text=f"Git error: {exc}",
-            is_fallback=True,
-            model=active_cfg.model,
-            fallback_reason=str(exc),
-        )
-
+    commits = extract_commits_between(from_ref, to_ref, runner=runner, repo=repo_path)
     if not commits:
-        empty_msg = f"No commits found between '{from_ref}' and '{to_ref}'."
-        con.print(f"[dim]{empty_msg}[/dim]")
         return GenerationResult(
-            text=empty_msg,
+            text=f"No commits found between '{from_ref}' and '{to_ref}'.",
             is_fallback=False,
             model=active_cfg.model,
         )
@@ -288,16 +235,6 @@ def generate_changelog(
     grouped = group_commits(commits)
     formatted_commits = format_commits_for_prompt(grouped)
 
-    active_counter = counter
-    if active_counter is None and provider is not None:
-
-        class _SimpleCounter(TokenCounter):
-            def count_tokens(self, text: str, model: str) -> int:
-                return max(1, len(text) // 4)
-
-        active_counter = _SimpleCounter()
-
-    t0 = time.perf_counter()
     gen_result = run_generation_pipeline(
         diffs=diffs,
         cfg=active_cfg,
@@ -310,24 +247,12 @@ def generate_changelog(
             "from_ref": from_ref,
             "to_ref": to_ref,
         },
+        command="changelog",
         provider=provider,
-        counter=active_counter,
+        counter=counter,
         console=con,
         secret_store=secret_store,
         bypass_cache=bypass_cache,
-    )
-    latency_ms = int((time.perf_counter() - t0) * 1000)
-
-    _safe_record_telemetry(
-        command="changelog",
-        model=gen_result.model,
-        tokens_in=gen_result.input_tokens,
-        tokens_out=gen_result.output_tokens,
-        cache_hit=gen_result.cache_hit,
-        latency_ms=latency_ms,
-        fallback_used=gen_result.is_fallback,
-        estimated_cost_usd=gen_result.estimated_cost_usd,
-        free_tier=active_cfg.free_tier,
     )
 
     if output_file is not None:

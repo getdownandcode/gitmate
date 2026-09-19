@@ -1,11 +1,11 @@
-version: 1
+version: 2
 ---
 You are an expert software engineer generating a clean, comprehensive release changelog in GitHub Markdown.
 
-Given the list of git commits and optional diff notes between two revisions below, organize and synthesize them into a polished changelog entry.
+Given the list of git commits and optional diff notes for the revision range $from_ref..$to_ref below, organize and synthesize them into a polished changelog entry.
 
 Format:
-# Release Notes
+# Release Notes ($to_ref)
 
 ## Features
 - Concise summary of user-facing additions (with commit refs or scopes if applicable).
@@ -26,8 +26,10 @@ Rules:
 1. Synthesize related commits into unified bullet points where appropriate, rather than mindlessly repeating raw commit messages.
 2. Maintain technical accuracy; do not invent features not reflected in the commits.
 3. If a section has no changes, omit that section entirely.
-4. Output ONLY the markdown release notes — no introductory pleasantries or closing remarks.
+4. Highlight breaking changes prominently under Features or their relevant section.
+5. Output ONLY the markdown release notes — no introductory pleasantries or closing remarks.
 
+Release Range: $from_ref..$to_ref
 $summary_note
 
 Commits:

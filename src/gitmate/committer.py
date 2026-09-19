@@ -19,9 +19,13 @@ from gitmate import config as config_mod
 from gitmate.config import GitmateConfig
 from gitmate.diff_extractor import DiffExtractor, GitCommandError
 from gitmate.fallback import generate_commit_message
-from gitmate.metrics import get_monthly_spend, record_invocation
+from gitmate.orchestrator import (
+    BudgetCapExceededError,
+    check_budget_cap,
+    safe_record_telemetry,
+)
 from gitmate.providers.base import LLMProvider
-from gitmate.token_budget import TokenCounter
+from gitmate.token_budget import HeuristicTokenCounter, TokenCounter
 
 logger = logging.getLogger("gitmate.committer")
 
@@ -30,31 +34,7 @@ GIT_COMMENT_BLOCK = (
     "# with '#' will be ignored, and an empty message aborts the commit.\n"
 )
 
-
-def _safe_record_telemetry(
-    command: str,
-    model: str,
-    tokens_in: int | None,
-    tokens_out: int | None,
-    cache_hit: bool,
-    latency_ms: int | None,
-    fallback_used: bool,
-    estimated_cost_usd: float | None = None,
-) -> None:
-    """Record invocation to metrics database without propagating errors."""
-    try:
-        record_invocation(
-            command=command,
-            model=model,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            cache_hit=cache_hit,
-            latency_ms=latency_ms,
-            fallback_used=fallback_used,
-            estimated_cost_usd=estimated_cost_usd,
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to record telemetry: %s", exc)
+_safe_record_telemetry = safe_record_telemetry
 
 
 def _resolve_editor() -> str:
@@ -235,30 +215,16 @@ def commit_flow(
         return 1
 
     # 3. Monthly budget cap enforcement
-    if active_cfg.budget_cap_usd is not None:
-        monthly_spend = get_monthly_spend()
-        if monthly_spend >= active_cfg.budget_cap_usd:
-            con.print(
-                f"[red]error:[/red] Monthly budget cap exceeded "
-                f"(${monthly_spend:.2f} >= ${active_cfg.budget_cap_usd:.2f}). "
-                "Aborting to prevent further LLM spend.\n"
-                "To adjust or remove the cap, run: gitmate config set budget_cap_usd <new_limit_or_none>"
-            )
-            return 1
-        if monthly_spend >= 0.8 * active_cfg.budget_cap_usd:
-            con.print(
-                f"[yellow]warning: Monthly spend has reached {int(monthly_spend / active_cfg.budget_cap_usd * 100)}% "
-                f"of budget cap (${monthly_spend:.2f} / ${active_cfg.budget_cap_usd:.2f}).[/yellow]"
-            )
+    try:
+        check_budget_cap(active_cfg, console=con)
+    except BudgetCapExceededError:
+        return 1
 
-    active_counter = counter
-    if active_counter is None and provider is not None:
-
-        class _SimpleCounter(TokenCounter):
-            def count_tokens(self, text: str, model: str) -> int:
-                return max(1, len(text) // 4)
-
-        active_counter = _SimpleCounter()
+    active_counter = (
+        counter
+        if counter is not None
+        else (HeuristicTokenCounter() if provider is not None else None)
+    )
 
     # 4. Initial generation & telemetry recording
     t0 = time.perf_counter()
@@ -325,21 +291,10 @@ def commit_flow(
                 _render_panel(con, current_message, current_model, current_is_fallback)
 
         elif choice in ("r", "regenerate"):
-            if active_cfg.budget_cap_usd is not None:
-                monthly_spend = get_monthly_spend()
-                if monthly_spend >= active_cfg.budget_cap_usd:
-                    con.print(
-                        f"[red]error:[/red] Monthly budget cap exceeded "
-                        f"(${monthly_spend:.2f} >= ${active_cfg.budget_cap_usd:.2f}). "
-                        "Aborting to prevent further LLM spend.\n"
-                        "To adjust or remove the cap, run: gitmate config set budget_cap_usd <new_limit_or_none>"
-                    )
-                    continue
-                if monthly_spend >= 0.8 * active_cfg.budget_cap_usd:
-                    con.print(
-                        f"[yellow]warning: Monthly spend has reached {int(monthly_spend / active_cfg.budget_cap_usd * 100)}% "
-                        f"of budget cap (${monthly_spend:.2f} / ${active_cfg.budget_cap_usd:.2f}).[/yellow]"
-                    )
+            try:
+                check_budget_cap(active_cfg, console=con)
+            except BudgetCapExceededError:
+                continue
 
             con.print("Regenerating commit message with fresh API call...")
             t0 = time.perf_counter()

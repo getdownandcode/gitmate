@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from gitmate import config as config_mod
 from gitmate.config import GitmateConfig
@@ -23,6 +23,8 @@ __all__ = [
 
 if TYPE_CHECKING:
     from rich.console import Console
+
+    from gitmate.changelog import CommitLogEntry
 
 DOC_EXTENSIONS = {".md", ".rst", ".txt", ".adoc"}
 BUILD_FILENAMES = {
@@ -200,18 +202,16 @@ def _multi_file_fallback(diffs: list[FileDiff], style: str) -> str:
     return f"{header}\n\n{body}"
 
 
-def generate_fallback_pr_summary(
-    diffs: list[FileDiff], base: str = "main", head: str = "HEAD"
-) -> str:
+def generate_fallback_pr_summary(diffs: list[FileDiff], base: str = "main") -> str:
     """Deterministic offline fallback PR summary when LLM provider is unavailable."""
     if not diffs:
-        return f"## Summary\n\nNo changes between `{base}` and `{head}`.\n"
+        return f"## Summary\n\nNo changes between `{base}` and `HEAD`.\n"
 
     total_added = sum(d.additions for d in diffs)
     total_deleted = sum(d.deletions for d in diffs)
     summary = (
         f"## Summary\n\n"
-        f"Branch comparison `{base}...{head}` touching {len(diffs)} file(s) "
+        f"Branch comparison `{base}...HEAD` touching {len(diffs)} file(s) "
         f"(+{total_added}, -{total_deleted}).\n\n"
         f"## Changes\n"
     )
@@ -232,7 +232,7 @@ def generate_fallback_pr_summary(
     return summary
 
 
-def generate_fallback_changelog(commits: list[Any], from_ref: str, to_ref: str) -> str:
+def generate_fallback_changelog(commits: list[CommitLogEntry], from_ref: str, to_ref: str) -> str:
     """Deterministic offline fallback release notes when LLM provider is unavailable."""
     if not commits:
         return f"# Release Notes ({from_ref}..{to_ref})\n\nNo commits in revision range.\n"
@@ -246,9 +246,10 @@ def generate_fallback_changelog(commits: list[Any], from_ref: str, to_ref: str) 
             continue
         sections.append(f"## {category}")
         for c in category_commits:
-            scope_prefix = f"**{c.scope}**: " if getattr(c, "scope", None) else ""
-            desc = c.description if getattr(c, "description", None) else c.subject
-            sections.append(f"- {scope_prefix}{desc} ({c.commit_hash[:7]})")
+            scope_prefix = f"**{c.scope}**: " if c.scope else ""
+            breaking_prefix = "⚠ **BREAKING**: " if c.is_breaking else ""
+            desc = c.description if c.description else c.subject
+            sections.append(f"- {breaking_prefix}{scope_prefix}{desc} ({c.commit_hash[:7]})")
         sections.append("")
     return "\n".join(sections).strip() + "\n"
 

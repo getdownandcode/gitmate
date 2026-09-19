@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -28,10 +29,9 @@ def test_help_lists_all_commands() -> None:
 
 
 def test_stubs_report_not_implemented() -> None:
-    for name in ("pr-summary", "changelog", "doc"):
-        result = runner.invoke(cli.app, [name])
-        assert result.exit_code == 0
-        assert "not implemented" in result.output
+    result = runner.invoke(cli.app, ["doc"])
+    assert result.exit_code == 0
+    assert "not implemented" in result.output
 
 
 def test_config_show_reports_key_status(
@@ -424,3 +424,178 @@ def test_stats_cli_invalid_days(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     res = runner.invoke(cli.app, ["stats", "--days", "0"])
     assert res.exit_code != 0
     assert "positive integer" in res.output
+
+
+def test_pr_summary_cli_empty(git_repo: Path) -> None:
+    res = runner.invoke(cli.app, ["pr-summary", "--no-copy"])
+    assert res.exit_code == 0
+    assert "No changes between 'main' and HEAD." in res.output
+    assert "PR Summary" not in res.output
+
+
+def test_pr_summary_cli_with_changes(git_repo: Path) -> None:
+    from conftest import commit_file
+
+    subprocess.run(["git", "checkout", "-b", "feature-branch"], cwd=git_repo, check=True)
+    commit_file(git_repo, "feat.py", "x = 1\n", "feat: add feature")
+
+    res = runner.invoke(cli.app, ["pr-summary", "--no-copy", "--base", "main"])
+    assert res.exit_code == 0
+    assert "PR Summary" in res.output
+    assert "feat.py" in res.output
+
+
+def test_pr_summary_cli_git_error(git_repo: Path) -> None:
+    res = runner.invoke(cli.app, ["pr-summary", "--base", "non-existent-xyz", "--no-copy"])
+    assert res.exit_code == 1
+    assert "error" in res.output.lower()
+
+
+def test_pr_summary_cli_budget_cap_exceeded(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from gitmate.metrics import record_invocation
+
+    m_dir = tmp_path / "metrics"
+    monkeypatch.setenv("GITMATE_METRICS_DIR", str(m_dir))
+    record_invocation(
+        command="commit",
+        model="gemini-3-flash-preview",
+        tokens_in=1_000_000,
+        tokens_out=200_000,
+        cache_hit=False,
+        latency_ms=500,
+        fallback_used=False,
+        estimated_cost_usd=20.0,
+    )
+    runner.invoke(cli.app, ["config", "set", "budget_cap_usd", "5.0"])
+
+    res = runner.invoke(cli.app, ["pr-summary", "--no-copy"])
+    assert res.exit_code == 1
+    assert "budget cap exceeded" in res.output.lower()
+
+
+def test_pr_summary_cli_gh_error(git_repo: Path) -> None:
+    from unittest.mock import patch
+
+    from conftest import commit_file
+
+    subprocess.run(["git", "checkout", "-b", "feature-gh"], cwd=git_repo, check=True)
+    commit_file(git_repo, "gh.py", "x = 1\n", "feat: add gh test")
+
+    with patch("shutil.which", return_value=None):
+        res = runner.invoke(
+            cli.app, ["pr-summary", "--no-copy", "--create-pr", "--title", "test PR"]
+        )
+        assert res.exit_code == 1
+        assert "GitHub CLI ('gh') not found" in res.output
+
+
+def test_pr_summary_cli_gh_success_with_title(git_repo: Path) -> None:
+    from unittest.mock import patch
+
+    from conftest import commit_file
+
+    subprocess.run(["git", "checkout", "-b", "feature-gh-success"], cwd=git_repo, check=True)
+    commit_file(git_repo, "gh_success.py", "x = 2\n", "feat: gh success")
+
+    real_run = subprocess.run
+    gh_calls: list[list[str]] = []
+
+    def fake_run(
+        cmd: list[str], *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        if cmd and cmd[0] == "gh":
+            gh_calls.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
+        return real_run(cmd, *args, **kwargs)  # type: ignore[no-any-return,call-overload]
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("subprocess.run", side_effect=fake_run),
+    ):
+        # Long form --title
+        res = runner.invoke(
+            cli.app,
+            ["pr-summary", "--no-copy", "--create-pr", "--title", "CLI PR Title", "--base", "main"],
+        )
+        assert res.exit_code == 0
+        assert len(gh_calls) == 1
+        cmd_args = gh_calls[0]
+        assert "--title" in cmd_args
+        title_idx = cmd_args.index("--title")
+        assert cmd_args[title_idx + 1] == "CLI PR Title"
+
+        # Short form -t
+        gh_calls.clear()
+        res = runner.invoke(
+            cli.app,
+            ["pr-summary", "--no-copy", "--create-pr", "-t", "Short Title", "--base", "main"],
+        )
+        assert res.exit_code == 0
+        assert len(gh_calls) == 1
+        cmd_args = gh_calls[0]
+        assert "--title" in cmd_args
+        title_idx = cmd_args.index("--title")
+        assert cmd_args[title_idx + 1] == "Short Title"
+
+
+def test_changelog_cli_empty_range(git_repo: Path) -> None:
+    res = runner.invoke(cli.app, ["changelog", "--from", "HEAD", "--to", "HEAD"])
+    assert res.exit_code == 0
+    assert "No commits found between 'HEAD' and 'HEAD'." in res.output
+    # Must not duplicate print
+    assert res.output.count("No commits found") == 1
+
+
+def test_changelog_cli_git_error(git_repo: Path) -> None:
+    res = runner.invoke(cli.app, ["changelog", "--from", "non-existent-xyz", "--to", "HEAD"])
+    assert res.exit_code == 1
+    assert "error" in res.output.lower()
+
+
+def test_changelog_cli_budget_cap_exceeded(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from gitmate.metrics import record_invocation
+
+    m_dir = tmp_path / "metrics"
+    monkeypatch.setenv("GITMATE_METRICS_DIR", str(m_dir))
+    record_invocation(
+        command="commit",
+        model="gemini-3-flash-preview",
+        tokens_in=1_000_000,
+        tokens_out=200_000,
+        cache_hit=False,
+        latency_ms=500,
+        fallback_used=False,
+        estimated_cost_usd=20.0,
+    )
+    runner.invoke(cli.app, ["config", "set", "budget_cap_usd", "5.0"])
+
+    res = runner.invoke(cli.app, ["changelog", "--from", "HEAD~1", "--to", "HEAD"])
+    assert res.exit_code == 1
+    assert "budget cap exceeded" in res.output.lower()
+
+
+def test_changelog_cli_command(git_repo: Path, tmp_path: Path) -> None:
+    from conftest import commit_file
+
+    subprocess.run(["git", "tag", "v0.1.0"], cwd=git_repo, check=True)
+    commit_file(git_repo, "foo.py", "foo = 1", "feat: add foo")
+    subprocess.run(["git", "tag", "v0.2.0"], cwd=git_repo, check=True)
+
+    # Test stdout output
+    res = runner.invoke(cli.app, ["changelog", "--from", "v0.1.0", "--to", "v0.2.0"])
+    assert res.exit_code == 0
+    assert "Release Notes" in res.output
+    assert "add foo" in res.output
+
+    # Test file output
+    out_file = tmp_path / "RELEASE.md"
+    res_file = runner.invoke(
+        cli.app, ["changelog", "--from", "v0.1.0", "--to", "v0.2.0", "-o", str(out_file)]
+    )
+    assert res_file.exit_code == 0
+    assert out_file.exists()
+    assert "Release Notes" in out_file.read_text(encoding="utf-8")

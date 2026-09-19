@@ -19,6 +19,7 @@ dependencies = [
     "httpx>=0.27",
     "google-genai>=0.3",   # default provider (Gemini 3 Flash / Flash-Lite)
     "anthropic>=0.34",     # secondary provider, same LLMProvider interface
+    "pyperclip>=1.8.2",
 ]
 
 [project.optional-dependencies]

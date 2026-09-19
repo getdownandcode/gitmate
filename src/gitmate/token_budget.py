@@ -84,6 +84,14 @@ class GeminiTokenCounter:
             raise TokenCountError(f"failed to count tokens via Gemini SDK: {exc}") from exc
 
 
+class HeuristicTokenCounter:
+    """Test/fallback estimation only (~4 chars/token); not accurate enough for real budget enforcement."""
+
+    def count_tokens(self, text: str, model: str) -> int:
+        """Estimate token count using 4 chars/token heuristic with a minimum of 1."""
+        return max(1, len(text) // 4)
+
+
 class BudgetStrategy(str, Enum):
     """Strategy decided by the token budget manager."""
 

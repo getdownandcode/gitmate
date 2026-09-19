@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -20,6 +21,7 @@ config_app = typer.Typer(help="View and change gitmate settings.")
 app.add_typer(config_app, name="config")
 
 console = Console()
+err_console = Console(stderr=True)
 secret_store: config_mod.SecretStore = config_mod.KeyringSecretStore()
 
 
@@ -117,16 +119,97 @@ def stats(
         console.print(cmd_table)
 
 
-@app.command()
-def pr_summary() -> None:
-    """Generate a PR description for the current branch."""
-    _stub("pr-summary", "coming in Phase 7")
+@app.command("pr-summary")
+def pr_summary(
+    base: str = typer.Option("main", "--base", "-b", help="Base branch to compare against."),
+    title: str | None = typer.Option(None, "--title", "-t", help="PR title for gh pr create."),
+    copy: bool = typer.Option(True, "--copy/--no-copy", help="Copy summary to clipboard."),
+    create_pr: bool = typer.Option(
+        False, "--create-pr", help="Open GitHub PR create flow with gh CLI."
+    ),
+    bypass_cache: bool = typer.Option(False, "--bypass-cache", help="Bypass cached generations."),
+) -> None:
+    """Generate a PR description by comparing HEAD against a base branch."""
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+
+    from gitmate.diff_extractor import GitCommandError
+    from gitmate.orchestrator import BudgetCapExceededError
+    from gitmate.pr_summary import GitHubCliError, generate_pr_summary
+
+    try:
+        res = generate_pr_summary(
+            base=base,
+            title=title,
+            console=err_console,
+            secret_store=secret_store,
+            bypass_cache=bypass_cache,
+            copy_to_cb=copy,
+            create_pr=create_pr,
+        )
+    except (GitCommandError, BudgetCapExceededError, GitHubCliError) as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
+
+    if res.text.startswith("No changes between"):
+        err_console.print(f"[dim]{res.text}[/dim]")
+        return
+
+    status_badge = (
+        "[yellow bold]⚠ FALLBACK TEMPLATE[/yellow bold]"
+        if res.is_fallback
+        else f"[green bold]{res.model}[/green bold]"
+    )
+    panel = Panel(
+        Markdown(res.text),
+        title=f"PR Summary [dim]({base}...HEAD) ({status_badge})[/dim]",
+        border_style="yellow" if res.is_fallback else "green",
+        padding=(1, 2),
+    )
+    console.print(panel)
 
 
-@app.command()
-def changelog() -> None:
-    """Generate a changelog section for a tag range."""
-    _stub("changelog", "coming in Phase 7")
+@app.command("changelog")
+def changelog(
+    from_ref: str = typer.Option(
+        ..., "--from", "-f", help="Starting git revision or tag (exclusive)."
+    ),
+    to_ref: str = typer.Option(
+        "HEAD", "--to", "-t", help="Ending git revision or tag (inclusive)."
+    ),
+    output: Path | None = typer.Option(  # noqa: B008
+        None, "--output", "-o", help="Output file path (prints to stdout if omitted)."
+    ),
+    include_diff: bool = typer.Option(
+        False, "--include-diff", help="Include diff summaries in addition to commits."
+    ),
+    bypass_cache: bool = typer.Option(False, "--bypass-cache", help="Bypass cached generations."),
+) -> None:
+    """Generate a changelog section between two git tags or revisions."""
+    from gitmate.changelog import generate_changelog
+    from gitmate.diff_extractor import GitCommandError
+    from gitmate.orchestrator import BudgetCapExceededError
+
+    try:
+        res = generate_changelog(
+            from_ref=from_ref,
+            to_ref=to_ref,
+            include_diff=include_diff,
+            output_file=output,
+            console=err_console,
+            secret_store=secret_store,
+            bypass_cache=bypass_cache,
+        )
+    except (GitCommandError, BudgetCapExceededError) as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
+
+    if res.text.startswith("No commits found"):
+        err_console.print(f"[dim]{res.text}[/dim]")
+        return
+
+    if output is None:
+        typer.echo(res.text)
 
 
 @app.command()

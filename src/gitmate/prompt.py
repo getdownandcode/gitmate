@@ -12,6 +12,7 @@ TEMPLATE_ALIASES: dict[str, str] = {
     "pr_summary": "pr_summary",
     "commit_conventional": "commit_conventional",
     "commit_plain": "commit_plain",
+    "changelog": "changelog",
 }
 
 
@@ -96,8 +97,13 @@ def load_template(style: str) -> PromptTemplate:
     return parse_template_content(content, name=template_name)
 
 
+def render_prompt(template_name_or_style: str, **kwargs: str) -> tuple[str, str]:
+    """Render any versioned template with kwargs and return (prompt_text, version_key)."""
+    template = load_template(template_name_or_style)
+    rendered = template.render(**kwargs)
+    return rendered, template.version_key
+
+
 def render_commit_prompt(style: str, diff_text: str, summary_note: str = "") -> tuple[str, str]:
     """Render a commit prompt for the given style and return (prompt, version_key)."""
-    template = load_template(style)
-    rendered = template.render(diff=diff_text, summary_note=summary_note)
-    return rendered, template.version_key
+    return render_prompt(style, diff=diff_text, summary_note=summary_note)

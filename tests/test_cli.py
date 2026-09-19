@@ -491,6 +491,55 @@ def test_pr_summary_cli_gh_error(git_repo: Path) -> None:
         assert "GitHub CLI ('gh') not found" in res.output
 
 
+def test_pr_summary_cli_gh_success_with_title(git_repo: Path) -> None:
+    from unittest.mock import patch
+
+    from conftest import commit_file
+
+    subprocess.run(["git", "checkout", "-b", "feature-gh-success"], cwd=git_repo, check=True)
+    commit_file(git_repo, "gh_success.py", "x = 2\n", "feat: gh success")
+
+    real_run = subprocess.run
+    gh_calls: list[list[str]] = []
+
+    def fake_run(
+        cmd: list[str], *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        if cmd and cmd[0] == "gh":
+            gh_calls.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
+        return real_run(cmd, *args, **kwargs)  # type: ignore[no-any-return,call-overload]
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("subprocess.run", side_effect=fake_run),
+    ):
+        # Long form --title
+        res = runner.invoke(
+            cli.app,
+            ["pr-summary", "--no-copy", "--create-pr", "--title", "CLI PR Title", "--base", "main"],
+        )
+        assert res.exit_code == 0
+        assert len(gh_calls) == 1
+        cmd_args = gh_calls[0]
+        assert "--title" in cmd_args
+        title_idx = cmd_args.index("--title")
+        assert cmd_args[title_idx + 1] == "CLI PR Title"
+
+        # Short form -t
+        gh_calls.clear()
+        res = runner.invoke(
+            cli.app,
+            ["pr-summary", "--no-copy", "--create-pr", "-t", "Short Title", "--base", "main"],
+        )
+        assert res.exit_code == 0
+        assert len(gh_calls) == 1
+        cmd_args = gh_calls[0]
+        assert "--title" in cmd_args
+        title_idx = cmd_args.index("--title")
+        assert cmd_args[title_idx + 1] == "Short Title"
+
+
 def test_changelog_cli_empty_range(git_repo: Path) -> None:
     res = runner.invoke(cli.app, ["changelog", "--from", "HEAD", "--to", "HEAD"])
     assert res.exit_code == 0

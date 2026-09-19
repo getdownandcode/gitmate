@@ -90,6 +90,38 @@ def test_parse_commit_message_body_breaking() -> None:
     assert entry.is_breaking is True
 
 
+def test_parse_commit_message_multiline_breaking_footer() -> None:
+    multiline_body = (
+        "Migrate internal auth from HMAC tokens to OAuth2 bearer tokens.\n\n"
+        "This improves security and aligns with current RFC specifications.\n\n"
+        "Reviewed-on: https://github.com/example/repo/pull/42\n"
+        "BREAKING CHANGE: HMAC tokens are no longer accepted on API v2 endpoints."
+    )
+    entry = parse_commit_message(
+        commit_hash="def789",
+        subject="feat(auth): transition to oauth2 tokens",
+        body=multiline_body,
+    )
+    assert entry.commit_type == "feat"
+    assert entry.scope == "auth"
+    assert entry.description == "transition to oauth2 tokens"
+    assert entry.is_breaking is True
+
+
+def test_parse_commit_message_multiline_breaking_hyphen_footer() -> None:
+    multiline_body = (
+        "Remove deprecated configuration parameters.\n\n"
+        "BREAKING-CHANGE: The 'legacy_mode' setting has been completely removed."
+    )
+    entry = parse_commit_message(
+        commit_hash="abc999",
+        subject="refactor(config): prune legacy config options",
+        body=multiline_body,
+    )
+    assert entry.commit_type == "refactor"
+    assert entry.is_breaking is True
+
+
 def test_parse_commit_message_non_conventional() -> None:
     entry = parse_commit_message(
         commit_hash="ghi789",
@@ -163,6 +195,35 @@ def test_extract_commits_between_real_git(git_repo: Path) -> None:
     subjects = [c.subject for c in commits]
     assert "fix(core): fix bug in b" in subjects
     assert "feat(core): add module a" in subjects
+
+
+def test_extract_commits_between_multiline_breaking_footer(git_repo: Path) -> None:
+    subprocess.run(["git", "tag", "v2.0.0"], cwd=git_repo, check=True)
+    file_path = git_repo / "breaking.py"
+    file_path.write_text("API_V2 = True\n")
+    subprocess.run(["git", "add", "breaking.py"], cwd=git_repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "commit",
+            "-m",
+            "feat(api): overhaul authorization",
+            "-m",
+            "Replaces API keys with scoped OAuth tokens.",
+            "-m",
+            "BREAKING CHANGE: Plain API keys are no longer supported.",
+        ],
+        cwd=git_repo,
+        check=True,
+    )
+    subprocess.run(["git", "tag", "v2.1.0"], cwd=git_repo, check=True)
+
+    commits = extract_commits_between("v2.0.0", "v2.1.0", repo=git_repo)
+    assert len(commits) == 1
+    assert commits[0].commit_type == "feat"
+    assert commits[0].scope == "api"
+    assert commits[0].is_breaking is True
+    assert "Plain API keys are no longer supported" in commits[0].body
 
 
 def test_generate_changelog_empty_range(git_repo: Path) -> None:

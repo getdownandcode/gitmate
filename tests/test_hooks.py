@@ -87,6 +87,7 @@ def test_install_is_executable_idempotent_and_uninstallable(tmp_path: Path) -> N
 def test_reinstall_rewrites_gitmate_hook_to_current_script(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Reinstall overwrites a gitmate-marked hook so upgrades fix stale interpreter paths."""
     repo = tmp_path / "repo"
     _init_repo(repo)
     path = install_hook(repo)
@@ -97,20 +98,6 @@ def test_reinstall_rewrites_gitmate_hook_to_current_script(
     install_hook(repo)
 
     assert path.read_text(encoding="utf-8") == current_script
-    assert path.stat().st_mode & 0o111
-
-
-def test_reinstall_updates_old_hook_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    path = install_hook(repo)
-    path.write_text(f"#!/bin/sh\n{HOOK_MARKER}\nold-interpreter\n", encoding="utf-8")
-    updated = f"#!/bin/sh\n{HOOK_MARKER}\nupdated-interpreter\n"
-    monkeypatch.setattr(hooks_mod, "HOOK_SCRIPT", updated)
-
-    install_hook(repo)
-
-    assert path.read_text(encoding="utf-8") == updated
     assert path.stat().st_mode & 0o111
 
 
@@ -209,6 +196,7 @@ def test_budget_cap_uses_template_fallback_in_real_hook(
 
 
 def test_replace_message_removes_old_orphaned_temporary_files(tmp_path: Path) -> None:
+    """A SIGKILLed worker leaves .COMMIT_EDITMSG.* orphans; the next write prunes them."""
     message_file = tmp_path / "COMMIT_EDITMSG"
     message_file.write_text("original\n", encoding="utf-8")
     old_temp = tmp_path / ".COMMIT_EDITMSG.abandoned"
@@ -337,20 +325,3 @@ def test_commit_command_has_no_hook_arguments() -> None:
 
     unexpected_arg = runner.invoke(app, ["commit", "some_file.py"])
     assert unexpected_arg.exit_code != 0
-
-
-def test_replace_message_prunes_stale_temp_files(tmp_path: Path) -> None:
-    message_file = tmp_path / "COMMIT_EDITMSG"
-    message_file.write_text("original\n", encoding="utf-8")
-    stale = tmp_path / ".COMMIT_EDITMSG.stale"
-    recent = tmp_path / ".COMMIT_EDITMSG.recent"
-    stale.write_text("orphaned\n", encoding="utf-8")
-    recent.write_text("active\n", encoding="utf-8")
-    old_time = time.time() - hooks_mod.HOOK_TIMEOUT_SECONDS - 10
-    os.utime(stale, (old_time, old_time))
-
-    hooks_mod._replace_message(message_file, "generated\n")
-
-    assert not stale.exists()
-    assert recent.exists()
-    assert message_file.read_text(encoding="utf-8") == "generated\n"

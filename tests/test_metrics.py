@@ -105,6 +105,7 @@ def test_record_invocation_and_retrieve_all_fields(metrics_dir: Path) -> None:
 
 
 def test_free_tier_is_persisted_and_not_repriced(metrics_dir: Path) -> None:
+    """Free-tier rows must read back as $0 spend so they can never spuriously trip a budget cap."""
     record_invocation(
         command="commit",
         model="gemini-3.5-flash-lite",
@@ -119,6 +120,10 @@ def test_free_tier_is_persisted_and_not_repriced(metrics_dir: Path) -> None:
     [record] = get_invocations()
     assert record.free_tier is True
     assert record.estimated_cost_usd == 0.0
+
+    from gitmate.metrics import get_monthly_spend
+
+    assert get_monthly_spend() == 0.0
 
 
 def test_record_invocation_boolean_mappings(metrics_dir: Path) -> None:

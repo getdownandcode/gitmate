@@ -73,7 +73,8 @@ def test_install_is_executable_idempotent_and_uninstallable(tmp_path: Path) -> N
     path = install_hook(repo)
     original = path.read_text(encoding="utf-8")
     assert path.stat().st_mode & 0o111
-    assert original.startswith(f"#!{sys.executable}\n")
+    assert original.startswith("#!/bin/sh\n")
+    assert sys.executable in original
     assert HOOK_MARKER in original
 
     assert install_hook(repo) == path
@@ -133,7 +134,7 @@ def test_pre_commit_source_environment_is_forwarded(
     monkeypatch.setattr(sys, "argv", ["gitmate-hook", str(message_file)])
     monkeypatch.setenv("PRE_COMMIT_COMMIT_MSG_SOURCE", "message")
     monkeypatch.setenv("PRE_COMMIT_COMMIT_OBJECT_NAME", "deadbeef")
-    monkeypatch.setattr(hooks_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr("gitmate.hooks.subprocess.run", fake_run)
 
     assert hooks_mod.main() == 0
     assert commands[0][-3:] == [str(message_file), "message", "deadbeef"]
@@ -238,3 +239,48 @@ def test_worker_failure_and_timeout_do_not_block_real_commit(
     assert result.returncode == 0, result.stderr
     assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "Use the repository template"
     assert elapsed < 8
+
+
+def test_commit_preserves_template_and_prepends_message(
+    tmp_path: Path, hook_env: dict[str, str]
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    install_hook(repo)
+    template = tmp_path / "commit-template.txt"
+    template.write_text("Ticket: JIRA-123\nReviewed-by: Lead\n", encoding="utf-8")
+    _git(repo, "config", "commit.template", str(template))
+
+    (repo / "auth.py").write_text("def auth(): pass\n", encoding="utf-8")
+    _git(repo, "add", "auth.py")
+
+    result = _commit(repo, env=hook_env)
+    assert result.returncode == 0, result.stderr
+    full_message = _git(repo, "log", "-1", "--format=%B").stdout
+    assert full_message.startswith("feat: add auth.py")
+    assert "Ticket: JIRA-123" in full_message
+    assert "Reviewed-by: Lead" in full_message
+
+
+def test_cli_commit_hook_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    monkeypatch.chdir(repo)
+
+    (repo / "new_module.py").write_text("val = 100\n", encoding="utf-8")
+    _git(repo, "add", "new_module.py")
+
+    msg_file = tmp_path / "COMMIT_EDITMSG"
+    msg_file.write_text("# Please enter the commit message\n# On branch main\n", encoding="utf-8")
+
+    runner = CliRunner()
+    res = runner.invoke(app, ["commit", "--hook-mode", str(msg_file)])
+    assert res.exit_code == 0, res.output
+    content = msg_file.read_text(encoding="utf-8")
+    assert content.startswith("feat: add new_module.py")
+    assert "# Please enter the commit message" in content
+
+    # Missing file argument returns error
+    res_err = runner.invoke(app, ["commit", "--hook-mode"])
+    assert res_err.exit_code == 1
+    assert "error" in res_err.output.lower()

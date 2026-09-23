@@ -12,12 +12,19 @@ from pathlib import Path
 HOOK_TIMEOUT_SECONDS = 4
 HOOK_MARKER = "# Installed by gitmate; managed by `gitmate install-hook`."
 
-HOOK_SCRIPT = f'''#!{sys.executable}
-# Installed by gitmate; managed by `gitmate install-hook`.
-"""Crash-safe launcher for gitmate's prepare-commit-msg worker."""
-import subprocess
-import sys
-
+HOOK_SCRIPT = f"""#!/bin/sh
+{HOOK_MARKER}
+# Crash-safe launcher for gitmate's prepare-commit-msg worker.
+PYTHON="{sys.executable}"
+if [ ! -x "$PYTHON" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+        PYTHON="python3"
+    else
+        exit 0
+    fi
+fi
+exec "$PYTHON" -c '
+import subprocess, sys
 try:
     subprocess.run(
         [sys.executable, "-m", "gitmate.hooks", "--worker", *sys.argv[1:]],
@@ -28,8 +35,9 @@ try:
     )
 except BaseException:
     pass
-raise SystemExit(0)
-'''
+sys.exit(0)
+' "$@"
+"""
 
 
 class HookError(Exception):
@@ -135,7 +143,13 @@ def _run_worker(args: list[str]) -> None:
         console=None,
         command="commit-hook",
     )
-    _replace_message(message_file, result.text.rstrip() + "\n")
+    existing = message_file.read_text(encoding="utf-8", errors="replace")
+    generated = result.text.rstrip()
+    if existing.strip():
+        new_message = f"{generated}\n\n{existing.lstrip()}"
+    else:
+        new_message = f"{generated}\n"
+    _replace_message(message_file, new_message)
 
 
 def _replace_message(message_file: Path, message: str) -> None:

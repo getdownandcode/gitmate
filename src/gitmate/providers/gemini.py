@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from tenacity import (
@@ -13,6 +14,12 @@ from tenacity import (
 )
 
 from gitmate.providers.base import LLMResponse, ProviderUnavailable, RetryableProviderError
+
+# The SDK emits a once-per-process AFC advisory via logger.warning on every
+# Models.generate_content call; it is irrelevant to gitmate's single-shot
+# usage and pollutes the commit flow's output, so quiet that channel to
+# ERROR while leaving genuine SDK errors audible.
+logging.getLogger("google_genai.models").setLevel(logging.ERROR)
 
 if TYPE_CHECKING:
     from google import genai

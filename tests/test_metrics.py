@@ -100,7 +100,25 @@ def test_record_invocation_and_retrieve_all_fields(metrics_dir: Path) -> None:
     assert rec.cache_hit is False
     assert rec.latency_ms == 450
     assert rec.fallback_used is False
+    assert rec.free_tier is False
     assert "T" in rec.timestamp  # ISO 8601
+
+
+def test_free_tier_is_persisted_and_not_repriced(metrics_dir: Path) -> None:
+    record_invocation(
+        command="commit",
+        model="gemini-3.5-flash-lite",
+        tokens_in=1_000_000,
+        tokens_out=1_000_000,
+        cache_hit=False,
+        latency_ms=200,
+        fallback_used=False,
+        free_tier=True,
+    )
+
+    [record] = get_invocations()
+    assert record.free_tier is True
+    assert record.estimated_cost_usd == 0.0
 
 
 def test_record_invocation_boolean_mappings(metrics_dir: Path) -> None:
@@ -331,6 +349,32 @@ def test_schema_migration_adds_estimated_cost_column(tmp_path: Path) -> None:
     assert len(records_after) == 2
     # Second record has calculated cost: 0.30 + 2.50 = 2.80
     assert records_after[1].estimated_cost_usd == 2.80
+
+
+def test_migration_does_not_guess_free_tier_for_existing_zero_cost_rows(
+    tmp_path: Path,
+) -> None:
+    db_file = tmp_path / "existing_metrics.db"
+    conn = sqlite3.connect(db_file)
+    conn.executescript(
+        """
+        CREATE TABLE invocations (
+            id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL, command TEXT NOT NULL,
+            model TEXT NOT NULL, tokens_in INTEGER, tokens_out INTEGER,
+            cache_hit INTEGER NOT NULL, latency_ms INTEGER,
+            fallback_used INTEGER NOT NULL, estimated_cost_usd REAL
+        );
+        INSERT INTO invocations VALUES (
+            1, '2026-09-01T12:00:00Z', 'commit', 'gemini-3.5-flash-lite',
+            1000000, 1000000, 0, 200, 0, 0.0
+        );
+        """
+    )
+    conn.close()
+
+    [record] = get_invocations(db_file)
+    assert record.free_tier is None
+    assert record.estimated_cost_usd == 0.0
 
 
 def test_get_monthly_spend(metrics_dir: Path) -> None:

@@ -33,25 +33,8 @@ def _stub(name: str, milestone: str) -> None:
 @app.command()
 def commit(
     yes: bool = typer.Option(False, "--yes", "-y", help="Commit without interactive confirmation."),
-    hook_mode: bool = typer.Option(
-        False,
-        "--hook-mode",
-        help="Non-interactive hook mode (writes directly to commit message file).",
-    ),
-    commit_msg_file: Path | None = typer.Argument(  # noqa: B008
-        None, help="Path to the commit message file in hook mode."
-    ),
 ) -> None:
     """Generate a commit message for the staged diff and review before committing."""
-    if hook_mode:
-        if commit_msg_file is None:
-            err_console.print("[red]error:[/red] --hook-mode requires a commit message file path.")
-            raise typer.Exit(1)
-        from gitmate.hooks import _run_worker
-
-        _run_worker([str(commit_msg_file)])
-        return
-
     from gitmate.committer import commit_flow
 
     code = commit_flow(yes=yes, console=console, secret_store=secret_store)

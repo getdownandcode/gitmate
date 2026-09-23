@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 HOOK_TIMEOUT_SECONDS = 4
@@ -68,10 +69,8 @@ def install_hook(cwd: Path | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         content = path.read_text(encoding="utf-8", errors="replace")
-        if HOOK_MARKER in content:
-            path.chmod(path.stat().st_mode | 0o111)
-            return path
-        raise HookError(f"{path} already exists; move or remove it before installing gitmate.")
+        if HOOK_MARKER not in content:
+            raise HookError(f"{path} already exists; move or remove it before installing gitmate.")
     path.write_text(HOOK_SCRIPT, encoding="utf-8")
     path.chmod(path.stat().st_mode | 0o111)
     return path
@@ -131,20 +130,37 @@ def _run_worker(args: list[str]) -> None:
 
     from gitmate import config as config_mod
     from gitmate.diff_extractor import DiffExtractor
-    from gitmate.fallback import generate_commit_message
+    from gitmate.fallback import generate_commit_message, generate_fallback_message
+    from gitmate.orchestrator import BudgetCapExceededError, safe_record_telemetry
 
     cfg = config_mod.load_config()
     diffs = DiffExtractor(extra_ignores=cfg.ignore_globs).staged()
     if not diffs:
         return
-    result = generate_commit_message(
-        diffs=diffs,
-        cfg=cfg,
-        console=None,
-        command="commit-hook",
-    )
+    started = time.perf_counter()
+    try:
+        result = generate_commit_message(
+            diffs=diffs,
+            cfg=cfg,
+            console=None,
+            command="commit-hook",
+            hook_mode=True,
+        )
+        generated = result.text.rstrip()
+    except BudgetCapExceededError:
+        generated = generate_fallback_message(diffs, style=cfg.commit_style)
+        safe_record_telemetry(
+            command="commit-hook",
+            model=cfg.model,
+            tokens_in=None,
+            tokens_out=None,
+            cache_hit=False,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            fallback_used=True,
+            estimated_cost_usd=0.0,
+            free_tier=cfg.free_tier,
+        )
     existing = message_file.read_text(encoding="utf-8", errors="replace")
-    generated = result.text.rstrip()
     if existing.strip():
         new_message = f"{generated}\n\n{existing.lstrip()}"
     else:
@@ -154,6 +170,14 @@ def _run_worker(args: list[str]) -> None:
 
 def _replace_message(message_file: Path, message: str) -> None:
     """Atomically replace Git's message file so write failures preserve its contents."""
+    cutoff = time.time() - HOOK_TIMEOUT_SECONDS
+    for stale in message_file.parent.glob(f".{message_file.name}.*"):
+        try:
+            if stale.is_file() and stale.stat().st_mtime < cutoff:
+                stale.unlink()
+        except OSError:
+            continue
+
     mode = stat.S_IMODE(message_file.stat().st_mode)
     temp_path: Path | None = None
     try:

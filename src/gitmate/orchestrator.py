@@ -118,6 +118,7 @@ def run_generation_pipeline(
     console: Console | None = None,
     secret_store: SecretStore | None = None,
     bypass_cache: bool = False,
+    hook_mode: bool = False,
 ) -> GenerationResult:
     """Execute unified generation: token budgeting, chunking, caching, LLM call, and fallback."""
     if empty_diff_message is not None and not diffs:
@@ -142,7 +143,7 @@ def run_generation_pipeline(
         else:
             active_provider = provider
     else:
-        base_provider = GeminiProvider(api_key=api_key)
+        base_provider = GeminiProvider(api_key=api_key, hook_mode=hook_mode)
         if bypass_cache:
             active_provider = base_provider
         else:
@@ -158,7 +159,7 @@ def run_generation_pipeline(
     elif provider is not None:
         active_counter = HeuristicTokenCounter()
     else:
-        active_counter = GeminiTokenCounter(api_key=api_key)
+        active_counter = GeminiTokenCounter(api_key=api_key, hook_mode=hook_mode)
 
     t0 = time.perf_counter()
     gen_result: GenerationResult
@@ -183,6 +184,14 @@ def run_generation_pipeline(
         chunk_cost = 0.0
 
         if decision.strategy is BudgetStrategy.NEEDS_CHUNKING:
+            if hook_mode:
+                gen_result = GenerationResult(
+                    text=fallback_generator(),
+                    is_fallback=True,
+                    model=cfg.model,
+                    fallback_reason="Hook time budget does not allow chunked generation.",
+                )
+                return gen_result
             if not decision.omitted_diffs:
                 if console is not None:
                     console.print(

@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 
 from gitmate import hooks as hooks_mod
 from gitmate.cli import app
+from gitmate.config import GitmateConfig, save_config
 from gitmate.hooks import HOOK_MARKER, HookError, install_hook, uninstall_hook
 from gitmate.metrics import get_invocations
 
@@ -81,6 +82,36 @@ def test_install_is_executable_idempotent_and_uninstallable(tmp_path: Path) -> N
     assert path.read_text(encoding="utf-8") == original
     assert uninstall_hook(repo) == path
     assert not path.exists()
+
+
+def test_reinstall_rewrites_gitmate_hook_to_current_script(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    path = install_hook(repo)
+    path.write_text(f"#!/bin/sh\n{HOOK_MARKER}\nold python path\n", encoding="utf-8")
+    current_script = f"#!/bin/sh\n{HOOK_MARKER}\ncurrent python path\n"
+    monkeypatch.setattr(hooks_mod, "HOOK_SCRIPT", current_script)
+
+    install_hook(repo)
+
+    assert path.read_text(encoding="utf-8") == current_script
+    assert path.stat().st_mode & 0o111
+
+
+def test_reinstall_updates_old_hook_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    path = install_hook(repo)
+    path.write_text(f"#!/bin/sh\n{HOOK_MARKER}\nold-interpreter\n", encoding="utf-8")
+    updated = f"#!/bin/sh\n{HOOK_MARKER}\nupdated-interpreter\n"
+    monkeypatch.setattr(hooks_mod, "HOOK_SCRIPT", updated)
+
+    install_hook(repo)
+
+    assert path.read_text(encoding="utf-8") == updated
+    assert path.stat().st_mode & 0o111
 
 
 def test_install_refuses_to_overwrite_existing_hook(tmp_path: Path) -> None:
@@ -157,6 +188,41 @@ def test_real_commit_gets_fallback_message_and_hook_metrics(
     assert len(rows) == 1
     assert rows[0].command == "commit-hook"
     assert rows[0].fallback_used
+
+
+def test_budget_cap_uses_template_fallback_in_real_hook(
+    tmp_path: Path, hook_env: dict[str, str]
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    install_hook(repo)
+    save_config(GitmateConfig(budget_cap_usd=0))
+    (repo / "feature.py").write_text("print('hello')\n", encoding="utf-8")
+    _git(repo, "add", "feature.py")
+
+    result = _commit(repo, env=hook_env)
+    assert result.returncode == 0, result.stderr
+    assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "feat: add feature.py"
+    [record] = get_invocations()
+    assert record.command == "commit-hook"
+    assert record.fallback_used
+
+
+def test_replace_message_removes_old_orphaned_temporary_files(tmp_path: Path) -> None:
+    message_file = tmp_path / "COMMIT_EDITMSG"
+    message_file.write_text("original\n", encoding="utf-8")
+    old_temp = tmp_path / ".COMMIT_EDITMSG.abandoned"
+    current_temp = tmp_path / ".COMMIT_EDITMSG.current"
+    old_temp.write_text("partial\n", encoding="utf-8")
+    current_temp.write_text("active\n", encoding="utf-8")
+    old = time.time() - hooks_mod.HOOK_TIMEOUT_SECONDS - 2
+    os.utime(old_temp, (old, old))
+
+    hooks_mod._replace_message(message_file, "new message\n")
+
+    assert not old_temp.exists()
+    assert current_temp.exists()
+    assert message_file.read_text(encoding="utf-8") == "new message\n"
 
 
 def test_message_source_is_untouched(tmp_path: Path, hook_env: dict[str, str]) -> None:
@@ -262,25 +328,29 @@ def test_commit_preserves_template_and_prepends_message(
     assert "Reviewed-by: Lead" in full_message
 
 
-def test_cli_commit_hook_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    monkeypatch.chdir(repo)
-
-    (repo / "new_module.py").write_text("val = 100\n", encoding="utf-8")
-    _git(repo, "add", "new_module.py")
-
-    msg_file = tmp_path / "COMMIT_EDITMSG"
-    msg_file.write_text("# Please enter the commit message\n# On branch main\n", encoding="utf-8")
-
+def test_commit_command_has_no_hook_arguments() -> None:
     runner = CliRunner()
-    res = runner.invoke(app, ["commit", "--hook-mode", str(msg_file)])
-    assert res.exit_code == 0, res.output
-    content = msg_file.read_text(encoding="utf-8")
-    assert content.startswith("feat: add new_module.py")
-    assert "# Please enter the commit message" in content
+    help_result = runner.invoke(app, ["commit", "--help"])
+    assert help_result.exit_code == 0
+    assert "hook-mode" not in help_result.output
+    assert "commit_msg_file" not in help_result.output
 
-    # Missing file argument returns error
-    res_err = runner.invoke(app, ["commit", "--hook-mode"])
-    assert res_err.exit_code == 1
-    assert "error" in res_err.output.lower()
+    unexpected_arg = runner.invoke(app, ["commit", "some_file.py"])
+    assert unexpected_arg.exit_code != 0
+
+
+def test_replace_message_prunes_stale_temp_files(tmp_path: Path) -> None:
+    message_file = tmp_path / "COMMIT_EDITMSG"
+    message_file.write_text("original\n", encoding="utf-8")
+    stale = tmp_path / ".COMMIT_EDITMSG.stale"
+    recent = tmp_path / ".COMMIT_EDITMSG.recent"
+    stale.write_text("orphaned\n", encoding="utf-8")
+    recent.write_text("active\n", encoding="utf-8")
+    old_time = time.time() - hooks_mod.HOOK_TIMEOUT_SECONDS - 10
+    os.utime(stale, (old_time, old_time))
+
+    hooks_mod._replace_message(message_file, "generated\n")
+
+    assert not stale.exists()
+    assert recent.exists()
+    assert message_file.read_text(encoding="utf-8") == "generated\n"

@@ -4,12 +4,31 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_fixed,
+)
 
 from gitmate.providers.base import LLMResponse, ProviderUnavailable, RetryableProviderError
 
 if TYPE_CHECKING:
     from google import genai
+
+HOOK_REQUEST_TIMEOUT_MS = 900
+HOOK_GENERATION_ATTEMPTS = 2
+
+
+def hook_http_options() -> object:
+    """Limit each Gemini HTTP request and disable SDK-level retries for hooks."""
+    from google.genai import types
+
+    return types.HttpOptions(
+        timeout=HOOK_REQUEST_TIMEOUT_MS,
+        retry_options=types.HttpRetryOptions(attempts=1),
+    )
 
 
 def _is_transient(exc: BaseException) -> bool:
@@ -28,9 +47,15 @@ def _is_transient(exc: BaseException) -> bool:
 class GeminiProvider:
     """LLMProvider backed by Google's Gemini models via google-genai."""
 
-    def __init__(self, api_key: str | None = None, client: genai.Client | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        client: genai.Client | None = None,
+        hook_mode: bool = False,
+    ) -> None:
         self._client = client
         self._api_key = api_key
+        self._hook_mode = hook_mode
 
     def _get_client(self) -> genai.Client:
         if self._client is not None:
@@ -41,12 +66,20 @@ class GeminiProvider:
             )
         from google import genai
 
-        self._client = genai.Client(api_key=self._api_key)
+        if self._hook_mode:
+            self._client = genai.Client(api_key=self._api_key, http_options=hook_http_options())
+        else:
+            self._client = genai.Client(api_key=self._api_key)
         return self._client
 
     def generate(self, prompt: str, model: str) -> LLMResponse:
         """Generate text for prompt, retrying transient failures then raising."""
         try:
+            if self._hook_mode:
+                return self._generate_with_retry.retry_with(  # type: ignore[attr-defined]
+                    stop=stop_after_attempt(HOOK_GENERATION_ATTEMPTS),
+                    wait=wait_fixed(0),
+                )(self._get_client(), prompt, model)
             return self._generate_with_retry(self._get_client(), prompt, model)
         except RetryableProviderError as exc:
             raise ProviderUnavailable(f"Gemini unavailable after retries: {exc}") from exc

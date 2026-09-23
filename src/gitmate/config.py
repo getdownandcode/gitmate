@@ -132,6 +132,11 @@ def get_context_window(cfg: GitmateConfig) -> int:
         return cfg.max_context_tokens
     if cfg.model in DEFAULT_MODEL_CONTEXT_WINDOWS:
         return DEFAULT_MODEL_CONTEXT_WINDOWS[cfg.model]
+    model_name = cfg.model.lower()
+    if model_name.startswith("gemini"):
+        return 1_048_576
+    if model_name.startswith("claude"):
+        return 200_000
     raise UnknownModelError(
         f"unknown model {cfg.model!r} with no context window configured. "
         "Set 'max_context_tokens' in config.toml or use a known model."

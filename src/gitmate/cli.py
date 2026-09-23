@@ -42,6 +42,34 @@ def commit(
         raise typer.Exit(code)
 
 
+@app.command("install-hook")
+def install_hook() -> None:
+    """Install gitmate's local prepare-commit-msg hook in this repository."""
+    from gitmate.hooks import HookError
+    from gitmate.hooks import install_hook as install
+
+    try:
+        path = install()
+    except HookError as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
+    console.print(f"[green]Installed prepare-commit-msg hook:[/green] {path}")
+
+
+@app.command("uninstall-hook")
+def uninstall_hook() -> None:
+    """Remove gitmate's local prepare-commit-msg hook."""
+    from gitmate.hooks import HookError
+    from gitmate.hooks import uninstall_hook as uninstall
+
+    try:
+        path = uninstall()
+    except HookError as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
+    console.print(f"[green]Removed gitmate prepare-commit-msg hook:[/green] {path}")
+
+
 @app.command()
 def stats(
     days: int | None = typer.Option(None, "--days", "-d", help="Limit stats to the last N days."),

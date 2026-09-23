@@ -142,10 +142,13 @@ the loop. Goal: something you actually run every day, not just a portfolio repo.
 
 **Goal:** stop having to remember to run the tool at all.
 
-- Ship a `prepare-commit-msg` git hook script that calls `gitmate commit --hook-mode` (non-interactive generate, writes to the commit message file git already opens in your editor — so you review inside your normal `git commit` flow, no extra step).
-- Also provide a `.pre-commit-hooks.yaml` so people using the `pre-commit` framework can add it with one config line.
+- Ship an optional local `prepare-commit-msg` hook. It calls only the generation pipeline, writes the message for Git's normal editor, and never runs `git commit` or the interactive accept/edit/regenerate loop.
+- Fail open: the launcher catches failures and exits 0; the generation worker has a four-second timeout and uses Phase 4 fallback when available. Message writes are atomic so a failed write leaves Git's original message intact.
+- Generate only when the source is `template` or absent. Leave `message` (explicit `-m`/`-F`), `merge`, `squash`, and all other source values untouched.
+- Refuse to overwrite an existing hook, support idempotent install and managed-hook uninstall, and honor Git's configured hooks path.
+- Also provide `.pre-commit-hooks.yaml` with `language: python` and `stages: [prepare-commit-msg]` for team adoption. The local `.git/hooks` installer is for one developer; the versioned pre-commit declaration is for teams. Its isolated environment still uses the user's OS credential store through keyring.
 
-**Deliverables:** `gitmate install-hook` command that symlinks/writes the hook into `.git/hooks/`, documented `pre-commit` config snippet.
+**Deliverables:** `gitmate install-hook` and `gitmate uninstall-hook`, crash/timeout safe real-repository tests, and a documented pre-commit config snippet.
 
 **Tech:** `pre-commit` framework config format, plain shell/Python hook script.
 

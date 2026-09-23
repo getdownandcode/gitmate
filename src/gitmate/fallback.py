@@ -262,6 +262,7 @@ def generate_commit_message(
     console: Console | None = None,
     secret_store: config_mod.SecretStore | None = None,
     bypass_cache: bool = False,
+    command: str | None = None,
 ) -> GenerationResult:
     """Orchestrate commit message generation with graceful fallback on provider failure."""
     return run_generation_pipeline(
@@ -270,6 +271,7 @@ def generate_commit_message(
         template_name=cfg.commit_style,
         fallback_generator=lambda: generate_fallback_message(diffs, style=cfg.commit_style),
         empty_diff_message="No changes staged for commit.",
+        command=command,
         provider=provider,
         counter=counter,
         console=console,

@@ -24,6 +24,35 @@ console = Console()
 err_console = Console(stderr=True)
 secret_store: config_mod.SecretStore = config_mod.KeyringSecretStore()
 
+#: The installed distribution name; the CLI command stays `gitmate`.
+DIST_NAME = "gitmate-cli"
+
+
+def _version_callback(value: bool) -> None:
+    """Print the installed distribution version for --version."""
+    if value:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            console.print(version(DIST_NAME))
+        except PackageNotFoundError:
+            console.print("unknown (gitmate-cli is not installed as a distribution)")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        help="Show the installed gitmate version and exit.",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+) -> None:
+    """AI-assisted git commit messages, PR summaries, and changelogs."""
+
 
 def _stub(name: str, milestone: str) -> None:
     """Report a planned command that has no implementation yet."""

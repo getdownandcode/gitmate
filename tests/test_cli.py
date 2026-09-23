@@ -28,6 +28,15 @@ def test_help_lists_all_commands() -> None:
         assert name in result.output
 
 
+def test_version_flag_prints_distribution_version() -> None:
+    from importlib.metadata import version
+
+    for flag in ("--version", "-V"):
+        result = runner.invoke(cli.app, [flag])
+        assert result.exit_code == 0
+        assert version("gitmate-cli") in result.output
+
+
 def test_stubs_report_not_implemented() -> None:
     result = runner.invoke(cli.app, ["doc"])
     assert result.exit_code == 0

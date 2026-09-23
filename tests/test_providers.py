@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 from tenacity import wait_none
 
+from gitmate.hooks import HOOK_TIMEOUT_SECONDS
 from gitmate.providers.base import LLMProvider, LLMResponse, ProviderUnavailable
 from gitmate.providers.cache import CachedProvider, cache_key
-from gitmate.providers.gemini import GeminiProvider
+from gitmate.providers.gemini import GeminiProvider, hook_http_options
 
 
 @pytest.fixture(autouse=True)
@@ -183,6 +185,51 @@ def test_gemini_provider_exhausts_retries() -> None:
     with pytest.raises(ProviderUnavailable, match="unavailable after retries"):
         provider.generate("p", "m")
     assert client.models.generate_content.call_count == 3
+
+
+def test_hook_provider_retry_fits_hook_timeout() -> None:
+    """A slow request that fails once must retry and still finish inside the hook budget."""
+    import httpx
+
+    client = MagicMock()
+    calls = 0
+
+    def slow_then_succeed(**kwargs: Any) -> MagicMock:
+        nonlocal calls
+        calls += 1
+        sleep(1.1)
+        if calls == 1:
+            raise httpx.ConnectError("temporary connection failure")
+        return _resp("ok")
+
+    client.models.generate_content.side_effect = slow_then_succeed
+    provider = GeminiProvider(client=client, hook_mode=True)
+    started = monotonic()
+    result = provider.generate("prompt", "gemini-3.5-flash-lite")
+    elapsed = monotonic() - started
+
+    assert result.text == "ok"
+    assert client.models.generate_content.call_count == 2
+    assert elapsed < HOOK_TIMEOUT_SECONDS
+
+
+def test_hook_provider_exhausts_after_two_attempts_not_three() -> None:
+    """Hook mode trades resilience for the time budget: 2 attempts, no backoff."""
+    from google.genai.errors import ServerError
+
+    client = MagicMock()
+    client.models.generate_content.side_effect = ServerError(500, None, None)
+    provider = GeminiProvider(client=client, hook_mode=True)
+    with pytest.raises(ProviderUnavailable, match="unavailable after retries"):
+        provider.generate("p", "m")
+    assert client.models.generate_content.call_count == 2
+
+
+def test_hook_http_options_disable_sdk_retries_and_bound_requests() -> None:
+    options = hook_http_options()
+    assert options.timeout == 900
+    assert options.retry_options is not None
+    assert options.retry_options.attempts == 1
 
 
 def test_gemini_provider_non_transient_raises_without_retry() -> None:

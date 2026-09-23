@@ -142,6 +142,14 @@ def test_get_context_window_unknown_model_raises() -> None:
     assert issubclass(UnknownModelError, ConfigError)
 
 
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [("gemini-future-model", 1_048_576), ("claude-future-model", 200_000)],
+)
+def test_get_context_window_uses_family_default(model: str, expected: int) -> None:
+    assert get_context_window(GitmateConfig(model=model)) == expected
+
+
 def test_get_context_window_unknown_model_with_override() -> None:
     cfg = GitmateConfig(model="unknown-model-xyz", max_context_tokens=32_000)
     assert get_context_window(cfg) == 32_000

@@ -1,0 +1,7 @@
+- id: gitmate-prepare-commit-msg
+  name: Generate a commit message with gitmate
+  description: Safely generate a commit message before the editor opens.
+  entry: gitmate-hook
+  language: python
+  stages: [prepare-commit-msg]
+  pass_filenames: true

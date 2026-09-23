@@ -51,9 +51,11 @@ class GeminiTokenCounter:
         self,
         api_key: str | None = None,
         client: genai.Client | None = None,
+        hook_mode: bool = False,
     ) -> None:
         self._client = client
         self._api_key = api_key
+        self._hook_mode = hook_mode
 
     def _get_client(self) -> genai.Client:
         if self._client is not None:
@@ -64,7 +66,15 @@ class GeminiTokenCounter:
             )
         from google import genai
 
-        self._client = genai.Client(api_key=self._api_key)
+        if self._hook_mode:
+            from gitmate.providers.gemini import hook_http_options
+
+            self._client = genai.Client(
+                api_key=self._api_key,
+                http_options=hook_http_options(),
+            )
+        else:
+            self._client = genai.Client(api_key=self._api_key)
         return self._client
 
     def count_tokens(self, text: str, model: str) -> int:

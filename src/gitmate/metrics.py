@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS invocations (
     cache_hit INTEGER NOT NULL,
     latency_ms INTEGER,
     fallback_used INTEGER NOT NULL,
-    estimated_cost_usd REAL
+    estimated_cost_usd REAL,
+    free_tier INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_invocations_timestamp ON invocations(timestamp);
 CREATE INDEX IF NOT EXISTS idx_invocations_command ON invocations(command);
@@ -63,6 +64,7 @@ class InvocationRecord:
     latency_ms: int | None
     fallback_used: bool
     estimated_cost_usd: float = 0.0
+    free_tier: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +160,9 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in cursor.fetchall()}
     if "estimated_cost_usd" not in columns:
         conn.execute("ALTER TABLE invocations ADD COLUMN estimated_cost_usd REAL")
+    if "free_tier" not in columns:
+        # Old rows are unknown: free-tier usage was not recorded, so don't guess.
+        conn.execute("ALTER TABLE invocations ADD COLUMN free_tier INTEGER")
 
 
 def init_db(db_path: Path | str | None = None) -> Path:
@@ -213,8 +218,8 @@ def record_invocation(
                     """
                     INSERT INTO invocations (
                         timestamp, command, model, tokens_in, tokens_out,
-                        cache_hit, latency_ms, fallback_used, estimated_cost_usd
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        cache_hit, latency_ms, fallback_used, estimated_cost_usd, free_tier
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ts,
@@ -226,6 +231,7 @@ def record_invocation(
                         latency_ms,
                         1 if fallback_used else 0,
                         cost,
+                        1 if free_tier else 0,
                     ),
                 )
     except Exception as exc:  # noqa: BLE001
@@ -248,7 +254,7 @@ def get_invocations(
             query = (
                 "SELECT id, timestamp, command, model, tokens_in, tokens_out, "
                 "cache_hit, latency_ms, fallback_used, "
-                "COALESCE(estimated_cost_usd, 0.0) as estimated_cost_usd "
+                "estimated_cost_usd, free_tier "
                 "FROM invocations ORDER BY id ASC"
             )
             if limit is not None:
@@ -258,11 +264,13 @@ def get_invocations(
             rows = cursor.fetchall()
             records: list[InvocationRecord] = []
             for row in rows:
-                raw_cost = float(row["estimated_cost_usd"])
-                # If an older row had tokens but $0.00 was recorded (and not cache hit or fallback),
-                # recalculate it at read-time against current pricing table:
+                stored_cost = row["estimated_cost_usd"]
+                raw_cost = float(stored_cost or 0.0)
+                free_tier = None if row["free_tier"] is None else bool(row["free_tier"])
+                # Reprice only known non-free rows, or rows predating cost persistence.
                 if (
                     raw_cost == 0.0
+                    and (free_tier is False or (free_tier is None and stored_cost is None))
                     and not bool(row["cache_hit"])
                     and not bool(row["fallback_used"])
                     and ((row["tokens_in"] or 0) > 0 or (row["tokens_out"] or 0) > 0)
@@ -285,6 +293,7 @@ def get_invocations(
                         latency_ms=row["latency_ms"],
                         fallback_used=bool(row["fallback_used"]),
                         estimated_cost_usd=raw_cost,
+                        free_tier=free_tier,
                     )
                 )
             return records

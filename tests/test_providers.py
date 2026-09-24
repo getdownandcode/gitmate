@@ -265,3 +265,11 @@ def test_cached_provider_underlying_property(tmp_path: Path) -> None:
         assert cached.underlying is fake
     finally:
         cached.close()
+
+
+def test_sdk_afc_advisory_quieted() -> None:
+    # The SDK's once-per-process AFC warning would otherwise print above
+    # every generated commit message; the provider pins that logger to ERROR.
+    import logging
+
+    assert logging.getLogger("google_genai.models").level == logging.ERROR

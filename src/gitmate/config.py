@@ -168,6 +168,8 @@ def load_config(path: Path | None = None) -> GitmateConfig:
         raise ConfigError(f"cannot parse {resolved}: 'budget_cap_usd' must be a number")
     else:
         cap = float(budget)
+        if cap < 0:
+            raise ConfigError(f"cannot parse {resolved}: 'budget_cap_usd' must be non-negative")
     globs = raw.get("ignore_globs", [])
     if not isinstance(globs, list) or not all(isinstance(g, str) for g in globs):
         raise ConfigError(f"cannot parse {resolved}: 'ignore_globs' must be a string list")

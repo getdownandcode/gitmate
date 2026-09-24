@@ -168,6 +168,13 @@ def test_budget_config_round_trip(tmp_config_dir: Path) -> None:
     assert loaded.template_overhead == 800
 
 
+def test_negative_budget_cap_rejected(tmp_config_dir: Path) -> None:
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text("budget_cap_usd = -1.0\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="must be non-negative"):
+        load_config()
+
+
 @pytest.mark.parametrize("val", ['"big"', "true", "-100", "0"])
 def test_invalid_max_context_tokens_raises(tmp_config_dir: Path, val: str) -> None:
     config_path().parent.mkdir(parents=True, exist_ok=True)

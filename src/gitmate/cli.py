@@ -66,7 +66,11 @@ def commit(
     """Generate a commit message for the staged diff and review before committing."""
     from gitmate.committer import commit_flow
 
-    code = commit_flow(yes=yes, console=console, secret_store=secret_store)
+    try:
+        code = commit_flow(yes=yes, console=console, secret_store=secret_store)
+    except config_mod.ConfigError as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from None
     if code != 0:
         raise typer.Exit(code)
 
@@ -204,7 +208,7 @@ def pr_summary(
             copy_to_cb=copy,
             create_pr=create_pr,
         )
-    except (GitCommandError, BudgetCapExceededError, GitHubCliError) as exc:
+    except (GitCommandError, BudgetCapExceededError, GitHubCliError, config_mod.ConfigError) as exc:
         err_console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(1) from None
 
@@ -257,7 +261,7 @@ def changelog(
             secret_store=secret_store,
             bypass_cache=bypass_cache,
         )
-    except (GitCommandError, BudgetCapExceededError) as exc:
+    except (GitCommandError, BudgetCapExceededError, config_mod.ConfigError) as exc:
         err_console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(1) from None
 
@@ -426,8 +430,11 @@ def config_set(field: str, value: str) -> None:
 
 
 def _parse_budget(value: str) -> float:
-    """Parse a budget string, rejecting non-numeric input."""
+    """Parse a budget string, rejecting non-numeric or negative input."""
     try:
-        return float(value)
+        budget = float(value)
     except ValueError:
         raise typer.BadParameter(f"{value!r} is not a number.") from None
+    if budget < 0:
+        raise typer.BadParameter(f"'budget_cap_usd' must be non-negative (got {value!r}).")
+    return budget

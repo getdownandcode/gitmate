@@ -4,9 +4,8 @@ AI-assisted git commit messages, PR summaries, and changelogs — with caching,
 cost control, and a human always in the loop before anything is committed.
 
 [![CI](https://github.com/getdownandcode/gitmate/actions/workflows/ci.yml/badge.svg)](https://github.com/getdownandcode/gitmate/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/gitmate-cli.svg)](https://pypi.org/project/gitmate-cli/)
-[![Python](https://img.shields.io/pypi/pyversions/gitmate-cli.svg)](https://pypi.org/project/gitmate-cli/)
-[![License](https://img.shields.io/pypi/l/gitmate-cli.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 ![gitmate demo](docs/demo.gif)
 
@@ -171,7 +170,7 @@ size-only ordering, deliberately, with the reasoning recorded in the code.
 **Tests run against real git.** The suite never mocks the git binary —
 scratch repositories in `tmp_path` with real commits. Only the `LLMProvider`
 boundary is faked, because that's where our code ends and a vendor's begins.
-291 tests, `mypy --strict` clean, `ruff` clean.
+297 tests, `mypy --strict` clean, `ruff` clean.
 
 ## Development
 

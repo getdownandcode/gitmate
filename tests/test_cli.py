@@ -178,6 +178,33 @@ def test_config_show_malformed_config_clean_error(tmp_config_dir: Path) -> None:
     assert "Traceback" not in result.output
 
 
+def test_commit_malformed_config_clean_error(tmp_config_dir: Path, git_repo: Path) -> None:
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text("model = [invalid toml\n", encoding="utf-8")
+    result = runner.invoke(cli.app, ["commit"])
+    assert result.exit_code == 1
+    assert "error:" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_pr_summary_malformed_config_clean_error(tmp_config_dir: Path, git_repo: Path) -> None:
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text("model = [invalid toml\n", encoding="utf-8")
+    result = runner.invoke(cli.app, ["pr-summary"])
+    assert result.exit_code == 1
+    assert "error:" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_changelog_malformed_config_clean_error(tmp_config_dir: Path, git_repo: Path) -> None:
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text("model = [invalid toml\n", encoding="utf-8")
+    result = runner.invoke(cli.app, ["changelog", "--from", "HEAD"])
+    assert result.exit_code == 1
+    assert "error:" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_debug_diff_git_command_error_clean_error(tmp_config_dir: Path, git_repo: Path) -> None:
     result = runner.invoke(cli.app, ["debug-diff", "--base", "nonexistent-branch"])
     assert result.exit_code == 1
@@ -224,6 +251,12 @@ def test_config_set_budget_fields_validation(tmp_config_dir: Path) -> None:
     res = runner.invoke(cli.app, ["config", "set", "max_context_tokens", "2000"])
     assert res.exit_code != 0
     assert "must be greater than" in res.output
+
+
+def test_config_set_rejects_negative_budget_cap(tmp_config_dir: Path) -> None:
+    res = runner.invoke(cli.app, ["config", "set", "budget_cap_usd", "--", "-5"])
+    assert res.exit_code != 0
+    assert "non-negative" in res.output
 
 
 def test_commit_cli_no_staged_diff_exits_zero(git_repo: Path, tmp_config_dir: Path) -> None:

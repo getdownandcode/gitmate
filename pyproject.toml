@@ -66,7 +66,7 @@ gitmate-hook = "gitmate.hooks:main"
 
 # Internal build documentation; not needed by anyone who pip-installs.
 [tool.hatch.build.targets.sdist]
-exclude = ["plan.md", "AGENTS.md"]
+exclude = ["plan.md", "AGENTS.md", "docs", ".github", "uv.lock", ".agents", ".gitignore"]
 
 # Import package differs from the distribution name (gitmate vs gitmate-cli).
 [tool.hatch.build.targets.wheel]

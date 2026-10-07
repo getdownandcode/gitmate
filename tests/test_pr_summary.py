@@ -207,3 +207,20 @@ def test_pr_summary_gh_cli_error(git_repo: Path) -> None:
             copy_to_cb=False,
             create_pr=True,
         )
+
+
+def test_pr_summary_honours_user_ignore_globs(git_repo: Path, metrics_dir: Path) -> None:
+    """User ignore_globs must filter PR diffs just like they do for commit."""
+    subprocess.run(["git", "checkout", "-b", "feature-y"], cwd=git_repo, check=True)
+    commit_file(git_repo, "hello.py", "print('hello')", "feat: add hello")
+    commit_file(git_repo, "generated/schema.json", "{}", "chore: regen schema")
+
+    provider = FakeProvider()
+    cfg = GitmateConfig(ignore_globs=["generated/"])
+    generate_pr_summary(
+        base="main", cfg=cfg, provider=provider, repo_dir=git_repo, copy_to_cb=False
+    )
+
+    prompt = provider.calls[0][0]
+    assert "hello.py" in prompt
+    assert "schema.json" not in prompt

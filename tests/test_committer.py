@@ -573,3 +573,50 @@ def test_commit_flow_budget_cap_warning_allows_commit(
     assert provider.call_count == 1
     messages = _get_git_log_messages(git_repo)
     assert messages[0] == "feat: allowed commit"
+
+
+# --- Regression: free-tier spend & Rich markup in the review UI ---
+
+
+def test_free_tier_commit_records_zero_spend(
+    git_repo: Path, metrics_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Free-tier commits must not be repriced at paid rates when read back."""
+    from gitmate.metrics import get_monthly_spend
+
+    stage_file(git_repo, "file.txt", b"content\n")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    cfg = GitmateConfig(allow_noninteractive_commit=True, free_tier=True)
+
+    assert commit_flow(yes=True, cfg=cfg, provider=FakeProvider()) == 0
+
+    invocations = get_invocations()
+    assert invocations[0].free_tier is True
+    assert get_monthly_spend() == 0.0
+
+
+def test_preview_and_git_output_render_brackets_literally(
+    git_repo: Path, metrics_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`[...]` in the message, menu, and git output must not be eaten as Rich markup."""
+    stage_file(git_repo, "file.txt", b"content\n")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    con = Console(record=True, width=200)
+    prompts: list[str] = []
+    inputs = iter(["[/oops]", "a"])
+
+    def _input(prompt: str = "") -> str:
+        prompts.append(prompt)
+        return next(inputs)
+
+    monkeypatch.setattr(con, "input", _input)
+    message = "fix(cli): handle list[str] input [skip ci]"
+
+    assert commit_flow(console=con, provider=FakeProvider(message)) == 0
+
+    out = con.export_text()
+    assert message in out  # preview panel
+    assert "Invalid selection '[/oops]'" in out  # no MarkupError
+    assert "[a]ccept, [e]dit, [r]egenerate, or [c]ancel" in out
+    assert "[master " in out or "[main " in out  # git's "[branch hash]" line
+    assert _get_git_log_messages(git_repo)[0] == message

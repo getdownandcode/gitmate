@@ -158,7 +158,7 @@ def test_generate_commit_message_counter_failure_triggers_fallback() -> None:
     assert result.text == "feat(auth): add login.py"
     assert "Token budgeting failed" in (result.fallback_reason or "")
     console.print.assert_called_once_with(
-        "[yellow]⚠ API unavailable, using template fallback[/yellow]"
+        "[yellow]⚠ Token budgeting failed, using template fallback[/yellow]"
     )
 
 
@@ -333,10 +333,10 @@ def test_generate_commit_message_chunking_success_final_call_fails_preserves_chu
     )
 
 
-def test_generate_commit_message_chunking_with_cached_final_call_preserves_chunk_cost(
+def test_generate_commit_message_fully_cached_rerun_costs_nothing(
     tmp_path: Path,
 ) -> None:
-    """When final prompt hits cache, chunking cost is still preserved rather than zeroed."""
+    """A rerun whose chunk summaries and final prompt are all cached must cost $0."""
     from gitmate.metrics import calculate_cost
     from gitmate.providers.cache import CachedProvider
 
@@ -368,7 +368,7 @@ def test_generate_commit_message_chunking_with_cached_final_call_preserves_chunk
     expected_full_cost = round(chunk_cost + final_cost, 6)
     assert res1.estimated_cost_usd == expected_full_cost
 
-    # 2. Second invocation: final prompt hits cache
+    # 2. Second invocation: chunk summaries and final prompt both hit cache
     res2 = generate_commit_message(
         diffs=_sample_diff(),
         cfg=cfg,
@@ -378,5 +378,86 @@ def test_generate_commit_message_chunking_with_cached_final_call_preserves_chunk
     )
     assert res2.is_fallback is False
     assert res2.cache_hit is True
-    # Final call cost was 0 (cache hit), but chunk_cost MUST still be preserved!
-    assert res2.estimated_cost_usd == chunk_cost
+    # No API tokens were billed on the rerun: cached chunk summaries are excluded.
+    assert res2.estimated_cost_usd == 0.0
+
+
+# --- Regression: file identity in prompt, cache-hit billing, single budget check ---
+
+
+def test_prompt_names_binary_and_truncated_files() -> None:
+    """Binary and size-truncated files must still be identified by path in the prompt."""
+    big = FileDiff(
+        path="src/huge.py",
+        old_path=None,
+        status="modified",
+        additions=900,
+        deletions=0,
+        patch_text="diff --git a/src/huge.py b/src/huge.py\n" + "+x = 1\n" * 900,
+        is_binary=False,
+    )
+    logo = FileDiff(
+        path="assets/logo.png",
+        old_path=None,
+        status="added",
+        additions=0,
+        deletions=0,
+        patch_text="",
+        is_binary=True,
+    )
+    small = _sample_diff()[0]
+    provider = FakeProvider()
+    # Tight window: forces truncation of the big file only.
+    cfg = GitmateConfig(max_context_tokens=2048 + 500 + 400)
+
+    generate_commit_message(
+        diffs=[big, logo, small], cfg=cfg, provider=provider, counter=FakeCounter(token_rate=4)
+    )
+
+    prompt = provider.prompts[-1]
+    assert "File src/huge.py (modified): [patch omitted for size:" in prompt
+    assert "Binary file assets/logo.png (added)" in prompt
+    assert "+class LoginService:" in prompt
+
+
+def test_cached_chunk_summaries_are_not_billed(tmp_path: Path) -> None:
+    """A fully cached rerun of a chunked generation must cost $0."""
+    from gitmate.chunking import summarize_omitted_diffs
+    from gitmate.providers.cache import CachedProvider
+
+    provider = CachedProvider(FakeProvider("summary"), cache_dir=tmp_path)
+    diffs = _sample_diff()
+
+    _, first_in, first_out = summarize_omitted_diffs(diffs, provider, "gemini-3.5-flash-lite")
+    _, again_in, again_out = summarize_omitted_diffs(diffs, provider, "gemini-3.5-flash-lite")
+
+    assert (first_in, first_out) == (150, 25)
+    assert (again_in, again_out) == (0, 0)
+    provider.close()
+
+
+def test_main_call_cache_hit_detected(tmp_path: Path) -> None:
+    from gitmate.providers.cache import CachedProvider
+
+    provider = CachedProvider(FakeProvider(), cache_dir=tmp_path)
+    cfg = GitmateConfig()
+    kwargs = {"diffs": _sample_diff(), "cfg": cfg, "provider": provider, "counter": FakeCounter()}
+
+    assert generate_commit_message(**kwargs).cache_hit is False  # type: ignore[arg-type]
+    second = generate_commit_message(**kwargs)  # type: ignore[arg-type]
+    assert second.cache_hit is True
+    assert second.estimated_cost_usd == 0.0
+    provider.close()
+
+
+def test_check_budget_false_skips_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Callers that already enforced the cap must not trigger a second check."""
+    import gitmate.orchestrator as orch
+
+    calls: list[object] = []
+    monkeypatch.setattr(orch, "check_budget_cap", lambda *a, **k: calls.append(a))
+    common = {"diffs": _sample_diff(), "cfg": GitmateConfig(), "provider": FakeProvider()}
+
+    generate_commit_message(**common, counter=FakeCounter())  # type: ignore[arg-type]
+    generate_commit_message(**common, counter=FakeCounter(), check_budget=False)  # type: ignore[arg-type]
+    assert len(calls) == 1

@@ -264,6 +264,7 @@ def generate_commit_message(
     bypass_cache: bool = False,
     command: str | None = None,
     hook_mode: bool = False,
+    check_budget: bool = True,
 ) -> GenerationResult:
     """Orchestrate commit message generation with graceful fallback on provider failure."""
     return run_generation_pipeline(
@@ -279,4 +280,5 @@ def generate_commit_message(
         console=console,
         secret_store=secret_store,
         bypass_cache=bypass_cache,
+        check_budget=check_budget,
     )

@@ -42,7 +42,8 @@ def summarize_omitted_diffs(
     """Summarize omitted diffs per file/chunk and return merged notes and token usage.
 
     Consumes BudgetDecision.omitted_diffs (which preserves untruncated patches),
-    prompts the provider for concise per-file summaries, and aggregates token usage.
+    prompts the provider for concise per-file summaries, and aggregates billed token
+    usage (responses served from a CachedProvider are excluded).
     """
     summaries: list[str] = []
     total_in = 0
@@ -63,10 +64,12 @@ def summarize_omitted_diffs(
                 f"{chunk}"
             )
             resp = provider.generate(prompt=prompt, model=model)
-            if resp.input_tokens is not None:
-                total_in += resp.input_tokens
-            if resp.output_tokens is not None:
-                total_out += resp.output_tokens
+            # Cache hits consumed no API tokens this run; don't bill them.
+            if not getattr(provider, "last_hit", False):
+                if resp.input_tokens is not None:
+                    total_in += resp.input_tokens
+                if resp.output_tokens is not None:
+                    total_out += resp.output_tokens
             text = resp.text.strip()
             if text:
                 file_part_summaries.append(text)

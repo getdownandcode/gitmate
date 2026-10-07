@@ -17,9 +17,10 @@ from gitmate.diff_extractor import FileDiff
 from gitmate.metrics import calculate_cost, get_monthly_spend, record_invocation
 from gitmate.prompt import load_template, render_prompt
 from gitmate.providers.base import LLMProvider, ProviderUnavailable
-from gitmate.providers.cache import CachedProvider, cache_key
+from gitmate.providers.cache import CachedProvider
 from gitmate.providers.gemini import GeminiProvider
 from gitmate.token_budget import (
+    OMITTED_NOTE_PREFIX,
     BudgetStrategy,
     GeminiTokenCounter,
     HeuristicTokenCounter,
@@ -105,6 +106,23 @@ def check_budget_cap(cfg: GitmateConfig, console: Console | None = None) -> None
         )
 
 
+def _prompt_diff_text(diffs: list[FileDiff]) -> str:
+    """Join patches for the prompt, labelling files whose patch text lacks a header.
+
+    Binary files carry no patch and truncated files carry only a size note, so
+    without a label the model would never learn which file they were.
+    """
+    parts: list[str] = []
+    for d in diffs:
+        if d.is_binary:
+            parts.append(f"Binary file {d.path} ({d.status})")
+        elif d.patch_text.startswith(OMITTED_NOTE_PREFIX):
+            parts.append(f"File {d.path} ({d.status}): {d.patch_text}")
+        elif d.patch_text:
+            parts.append(d.patch_text)
+    return "\n".join(parts)
+
+
 def run_generation_pipeline(
     diffs: list[FileDiff],
     cfg: GitmateConfig,
@@ -119,8 +137,13 @@ def run_generation_pipeline(
     secret_store: SecretStore | None = None,
     bypass_cache: bool = False,
     hook_mode: bool = False,
+    check_budget: bool = True,
 ) -> GenerationResult:
-    """Execute unified generation: token budgeting, chunking, caching, LLM call, and fallback."""
+    """Execute unified generation: token budgeting, chunking, caching, LLM call, and fallback.
+
+    Pass check_budget=False only when the caller has already run check_budget_cap,
+    so the 80% warning is not printed twice.
+    """
     if empty_diff_message is not None and not diffs:
         return GenerationResult(
             text=empty_diff_message,
@@ -128,7 +151,8 @@ def run_generation_pipeline(
             model=cfg.model,
         )
 
-    check_budget_cap(cfg, console=console)
+    if check_budget:
+        check_budget_cap(cfg, console=console)
 
     store = secret_store if secret_store is not None else config_mod.KeyringSecretStore()
     api_key = store.get_secret(API_KEY_ACCOUNT) or os.environ.get("GEMINI_API_KEY")
@@ -170,7 +194,7 @@ def run_generation_pipeline(
             decision = budget_mgr.assess(diffs)
         except TokenBudgetError as exc:
             if console is not None:
-                console.print("[yellow]⚠ API unavailable, using template fallback[/yellow]")
+                console.print("[yellow]⚠ Token budgeting failed, using template fallback[/yellow]")
             gen_result = GenerationResult(
                 text=fallback_generator(),
                 is_fallback=True,
@@ -225,12 +249,9 @@ def run_generation_pipeline(
             summary_note = (
                 f"{decision.summary_note}\n\nSummaries of large omitted files:\n{merged_summaries}"
             )
-            patch_chunks = [d.patch_text for d in decision.included_diffs if d.patch_text]
-            diff_text = "\n".join(patch_chunks)
         else:
-            patch_chunks = [d.patch_text for d in decision.included_diffs if d.patch_text]
-            diff_text = "\n".join(patch_chunks)
             summary_note = decision.summary_note
+        diff_text = _prompt_diff_text(decision.included_diffs)
 
         render_kwargs: dict[str, str] = {
             "diff": diff_text,
@@ -241,12 +262,8 @@ def run_generation_pipeline(
 
         prompt_text, _ = render_prompt(template_name, **render_kwargs)
 
-        cache_hit = False
-        if not bypass_cache and isinstance(active_provider, CachedProvider):
-            key = cache_key(prompt_text, cfg.model, active_provider._template_version)
-            cache_hit = active_provider._cache.get(key, default=None) is not None
-
         resp = active_provider.generate(prompt=prompt_text, model=cfg.model)
+        cache_hit = isinstance(active_provider, CachedProvider) and active_provider.last_hit
         if resp.input_tokens is not None:
             total_input_tokens += resp.input_tokens
         if resp.output_tokens is not None:

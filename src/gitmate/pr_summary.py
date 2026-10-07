@@ -93,7 +93,11 @@ def generate_pr_summary(
 
     check_budget_cap(active_cfg, console=con)
 
-    extractor = diff_extractor if diff_extractor is not None else DiffExtractor(repo=repo_dir)
+    extractor = (
+        diff_extractor
+        if diff_extractor is not None
+        else DiffExtractor(repo=repo_dir, extra_ignores=active_cfg.ignore_globs)
+    )
     diffs = extractor.branch_comparison(base=base)
 
     if not diffs:
@@ -115,6 +119,7 @@ def generate_pr_summary(
         console=con,
         secret_store=secret_store,
         bypass_cache=bypass_cache,
+        check_budget=False,  # already checked above
     )
 
     if copy_to_cb:

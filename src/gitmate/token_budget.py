@@ -18,6 +18,9 @@ from gitmate.diff_extractor import FileDiff
 if TYPE_CHECKING:
     from google import genai
 
+#: Start of the placeholder that replaces a patch dropped for size.
+OMITTED_NOTE_PREFIX = "[patch omitted for size:"
+
 
 class TokenBudgetError(Exception):
     """Base exception for token budgeting and counting errors."""
@@ -264,7 +267,7 @@ class TokenBudgetManager:
         current_tokens = total_tokens
 
         for candidate in candidates:
-            note = f"[patch omitted for size: +{candidate.additions}/-{candidate.deletions} lines]"
+            note = f"{OMITTED_NOTE_PREFIX} +{candidate.additions}/-{candidate.deletions} lines]"
             if len(candidate.patch_text) <= len(note):
                 continue
             omitted.append(candidate)

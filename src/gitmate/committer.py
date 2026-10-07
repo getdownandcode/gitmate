@@ -13,7 +13,9 @@ import time
 from pathlib import Path
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from gitmate import config as config_mod
 from gitmate.config import GitmateConfig
@@ -56,7 +58,7 @@ def _render_panel(console: Console, message: str, model: str, is_fallback: bool)
         else f"[green bold]{model}[/green bold]"
     )
     panel = Panel(
-        message,
+        Text(message),
         title=f"Proposed Commit Message [dim]({status_badge})[/dim]",
         border_style="yellow" if is_fallback else "green",
         padding=(1, 2),
@@ -88,12 +90,12 @@ def _execute_commit(message: str, console: Console | None = None, cwd: Path | No
         )
         if proc.returncode == 0:
             if console is not None and proc.stdout.strip():
-                console.print(proc.stdout.strip())
+                console.print(Text(proc.stdout.strip()))
         else:
             if console is not None:
                 err_msg = proc.stderr.strip() or proc.stdout.strip()
                 if err_msg:
-                    console.print(f"[red]{err_msg}[/red]")
+                    console.print(Text(err_msg, style="red"))
         return proc.returncode
     except FileNotFoundError:
         if console is not None:
@@ -236,6 +238,7 @@ def commit_flow(
         console=con,
         secret_store=secret_store,
         bypass_cache=False,
+        check_budget=False,
     )
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
@@ -248,6 +251,7 @@ def commit_flow(
         latency_ms=latency_ms,
         fallback_used=gen_result.is_fallback,
         estimated_cost_usd=gen_result.estimated_cost_usd,
+        free_tier=active_cfg.free_tier,
     )
 
     current_message = gen_result.text
@@ -265,7 +269,7 @@ def commit_flow(
     while True:
         try:
             raw_input = con.input(
-                "[bold cyan]?[/bold cyan] [bold][a]ccept / [e]dit / [r]egenerate / [c]ancel:[/bold] "
+                "[bold cyan]?[/bold cyan] [bold]\\[a]ccept / \\[e]dit / \\[r]egenerate / \\[c]ancel:[/bold] "
             )
         except (EOFError, KeyboardInterrupt):
             con.print("\nCommit cancelled.")
@@ -274,7 +278,7 @@ def commit_flow(
         choice = raw_input.strip().lower()
         if not choice:
             con.print(
-                "[yellow]Please select an option: [a]ccept, [e]dit, [r]egenerate, or [c]ancel.[/yellow]"
+                "[yellow]Please select an option: \\[a]ccept, \\[e]dit, \\[r]egenerate, or \\[c]ancel.[/yellow]"
             )
             continue
 
@@ -306,6 +310,7 @@ def commit_flow(
                 console=con,
                 secret_store=secret_store,
                 bypass_cache=True,
+                check_budget=False,
             )
             latency_ms = int((time.perf_counter() - t0) * 1000)
 
@@ -318,6 +323,7 @@ def commit_flow(
                 latency_ms=latency_ms,
                 fallback_used=gen_result.is_fallback,
                 estimated_cost_usd=gen_result.estimated_cost_usd,
+                free_tier=active_cfg.free_tier,
             )
 
             current_message = gen_result.text
@@ -331,6 +337,6 @@ def commit_flow(
 
         else:
             con.print(
-                f"[yellow]Invalid selection '{raw_input}'. "
-                "Please choose [a]ccept, [e]dit, [r]egenerate, or [c]ancel.[/yellow]"
+                f"[yellow]Invalid selection '{escape(raw_input)}'. "
+                "Please choose \\[a]ccept, \\[e]dit, \\[r]egenerate, or \\[c]ancel.[/yellow]"
             )

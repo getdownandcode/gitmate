@@ -221,7 +221,7 @@ def generate_changelog(
     extractor = (
         diff_extractor
         if diff_extractor is not None
-        else DiffExtractor(repo=repo_path, runner=runner)
+        else DiffExtractor(repo=repo_path, runner=runner, extra_ignores=active_cfg.ignore_globs)
     )
     diffs = []
     if include_diff:
@@ -253,6 +253,7 @@ def generate_changelog(
         console=con,
         secret_store=secret_store,
         bypass_cache=bypass_cache,
+        check_budget=False,  # already checked above
     )
 
     if output_file is not None:

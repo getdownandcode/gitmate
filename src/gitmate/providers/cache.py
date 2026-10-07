@@ -46,6 +46,8 @@ class CachedProvider:
         self._cache = Cache(resolved)
         self._ttl = ttl
         self._template_version = template_version
+        #: True when the most recent generate() was answered from the cache.
+        self.last_hit = False
 
     @property
     def underlying(self) -> LLMProvider:
@@ -56,6 +58,7 @@ class CachedProvider:
         """Return a cached response when present, else generate and store."""
         key = cache_key(prompt, model, self._template_version)
         cached: LLMResponse | None = self._cache.get(key, default=None)
+        self.last_hit = cached is not None
         if cached is not None:
             return cached
         response = self._provider.generate(prompt, model)
